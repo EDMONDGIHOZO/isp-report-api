@@ -29,6 +29,8 @@ builder.Services.AddScoped<AuthService>();
 
 builder.Services.AddSingleton<IOracleConnectionFactory, OracleConnectionFactory>();
 builder.Services.AddScoped<IOracleRepository, OracleRepository>();
+builder.Services.AddScoped<IIspReportRepository, IspReportRepository>();
+builder.Services.AddScoped<IIspReportService, IspReportService>();
 
 
 // JWT Authentication
@@ -52,6 +54,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
@@ -79,6 +82,8 @@ app.UseSwagger();
 
 app.UseSwaggerUI(options => { options.SwaggerEndpoint("/swagger/v1/swagger.json", "ISP REPORTS API"); });
 
+app.MapControllers();
+
 app.MapGet("/", () => Results.Json(new
 {
     status = "welcome",
@@ -91,6 +96,40 @@ app.MapGet("/health", () => Results.Json(new
         timestamp = DateTime.UtcNow
     }))
     .WithName("HealthCheck");
+
+app.MapGet(
+        "/health/oracle",
+        async (IOracleConnectionFactory connectionFactory) =>
+        {
+            try
+            {
+                using var connection = connectionFactory.CreateConnection();
+                connection.Open();
+                return Results.Json(
+                    new
+                    {
+                        status = "connected",
+                        database = "Oracle",
+                        timestamp = DateTime.UtcNow,
+                    }
+                );
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(
+                    new
+                    {
+                        status = "failed",
+                        database = "Oracle",
+                        error = ex.Message,
+                        timestamp = DateTime.UtcNow,
+                    },
+                    statusCode: 500
+                );
+            }
+        }
+    )
+    .WithName("OracleHealthCheck");
 
 // Auth endpoints
 app.MapPost("/auth/register", async ([FromBody] RegisterRequest request, AuthService authService) =>
