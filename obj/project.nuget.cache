@@ -1,10 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "qXWcYZK07Yc=",
+  "dgSpecHash": "JMw95qAWThM=",
   "success": true,
   "projectFilePath": "/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/isp-report-api.csproj",
   "expectedPackageFiles": [
     "/Users/eddy/.nuget/packages/bouncycastle.cryptography/2.6.2/bouncycastle.cryptography.2.6.2.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/dapper/2.1.66/dapper.2.1.66.nupkg.sha512",
     "/Users/eddy/.nuget/packages/google.protobuf/3.32.0/google.protobuf.3.32.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/humanizer.core/2.14.1/humanizer.core.2.14.1.nupkg.sha512",
     "/Users/eddy/.nuget/packages/k4os.compression.lz4/1.3.8/k4os.compression.lz4.1.3.8.nupkg.sha512",
@@ -41,6 +42,7 @@
     "/Users/eddy/.nuget/packages/mono.texttemplating/3.0.0/mono.texttemplating.3.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/mysql.data/9.5.0/mysql.data.9.5.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/mysql.entityframeworkcore/9.0.9/mysql.entityframeworkcore.9.0.9.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/oracle.manageddataaccess.core/23.26.100/oracle.manageddataaccess.core.23.26.100.nupkg.sha512",
     "/Users/eddy/.nuget/packages/swashbuckle.aspnetcore/10.1.2/swashbuckle.aspnetcore.10.1.2.nupkg.sha512",
     "/Users/eddy/.nuget/packages/swashbuckle.aspnetcore.swagger/10.1.2/swashbuckle.aspnetcore.swagger.10.1.2.nupkg.sha512",
     "/Users/eddy/.nuget/packages/swashbuckle.aspnetcore.swaggergen/10.1.2/swashbuckle.aspnetcore.swaggergen.10.1.2.nupkg.sha512",
@@ -53,6 +55,7 @@
     "/Users/eddy/.nuget/packages/system.composition.runtime/7.0.0/system.composition.runtime.7.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.composition.typedparts/7.0.0/system.composition.typedparts.7.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.configuration.configurationmanager/8.0.0/system.configuration.configurationmanager.8.0.0.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/system.diagnostics.performancecounter/8.0.0/system.diagnostics.performancecounter.8.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.directoryservices.protocols/9.0.1/system.directoryservices.protocols.9.0.1.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.identitymodel.tokens.jwt/8.4.0/system.identitymodel.tokens.jwt.8.4.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.security.cryptography.pkcs/8.0.1/system.security.cryptography.pkcs.8.0.1.nupkg.sha512",

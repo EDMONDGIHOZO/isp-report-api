@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text;
 using isp_report_api.Data;
 using isp_report_api.Models;
+using isp_report_api.Repository;
 using isp_report_api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
@@ -25,6 +26,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<AdAuthService>();
 builder.Services.AddScoped<AuthService>();
+
+builder.Services.AddSingleton<IOracleConnectionFactory, OracleConnectionFactory>();
+builder.Services.AddScoped<IOracleRepository, OracleRepository>();
 
 
 // JWT Authentication
