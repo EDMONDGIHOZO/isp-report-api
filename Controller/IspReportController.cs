@@ -10,10 +10,15 @@ namespace isp_report_api.Controller;
 public class IspReportController : ControllerBase
 {
     private readonly IIspReportService _ispReportService;
+    private readonly IIspReportPdfService _pdfService;
 
-    public IspReportController(IIspReportService ispReportService)
+    public IspReportController(
+        IIspReportService ispReportService,
+        IIspReportPdfService pdfService
+    )
     {
         _ispReportService = ispReportService;
+        _pdfService = pdfService;
     }
 
     [HttpGet("monthly")]
@@ -40,6 +45,83 @@ public class IspReportController : ControllerBase
         {
             return StatusCode(500, new { Error = "Failed to fetch reports", Details = ex.Message });
         }
+    }
+
+        [HttpGet("monthly-all")]
+        [Authorize]
+        public async Task<IActionResult> GetMonthlyReportsAllIsps(
+            [FromQuery] string? from,
+            [FromQuery] string? to
+        )
+        {
+            try
+            {
+                var filter = new IspReportFilter
+                {
+                    FromPeriod = from,
+                    ToPeriod = to,
+                    IspName = null,
+                };
+
+                var series = await _ispReportService.GetMonthlyReportsAllIspsAsync(filter);
+                return Ok(series);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new { Error = "Failed to fetch monthly reports for all ISPs", Details = ex.Message }
+                );
+            }
+        }
+
+    [HttpGet("monthly-all-pdf")]
+    [Authorize]
+    public async Task<IActionResult> GetMonthlyReportsAllIspsPdf(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string chartType = "area"
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = null,
+            };
+
+            var pdfBytes = await _pdfService.GenerateAllIspsPdfAsync(filter, chartType);
+
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+            var fileName = $"prepaid-sales-all-isps-{timestamp}.pdf";
+
+            return File(pdfBytes, "application/pdf", fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to generate PDF report", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpDelete("pdf-cache")]
+    [Authorize]
+    public IActionResult ClearPdfCache()
+    {
+        var deleted = _pdfService.ClearCache();
+        return Ok(new
+        {
+            Message = $"Deleted {deleted} cached PDF(s)",
+            CacheDirectory = _pdfService.GetCacheDirectory(),
+        });
     }
 
     [HttpGet("isps")]

@@ -16,7 +16,11 @@ public class AdAuthService
     private readonly ILogger<AdAuthService> _logger;
     private readonly AppDbContext _db;
 
-    public AdAuthService(IConfiguration configuration, ILogger<AdAuthService> logger, AppDbContext db)
+    public AdAuthService(
+        IConfiguration configuration,
+        ILogger<AdAuthService> logger,
+        AppDbContext db
+    )
     {
         _configuration = configuration;
         _logger = logger;
@@ -24,16 +28,17 @@ public class AdAuthService
     }
 
     /// <summary>
-    /// Authenticates a user against Active Directory using LDAP
+    /// Authenticates a user against Active Directory using LDAP.
+    /// Accepts either a username (sAMAccountName) or work email address.
     /// </summary>
-    public async Task<AdAuthResult> AuthenticateAsync(string username, string password)
+    public async Task<AdAuthResult> AuthenticateAsync(string usernameOrEmail, string password)
     {
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        if (string.IsNullOrWhiteSpace(usernameOrEmail) || string.IsNullOrWhiteSpace(password))
         {
             return new AdAuthResult
             {
                 Success = false,
-                ErrorMessage = "Username and password are required."
+                ErrorMessage = "Username/email and password are required.",
             };
         }
 
@@ -43,6 +48,8 @@ public class AdAuthService
         var baseDn = _configuration["ActiveDirectory:BaseDn"];
         var domain = _configuration["ActiveDirectory:Domain"];
         var useSSL = bool.Parse(_configuration["ActiveDirectory:UseSSL"] ?? "false");
+        var serviceAccount = _configuration["ActiveDirectory:ServiceAccount"];
+        var servicePassword = _configuration["ActiveDirectory:ServicePassword"];
 
         if (string.IsNullOrEmpty(server))
         {
@@ -50,25 +57,70 @@ public class AdAuthService
             return new AdAuthResult
             {
                 Success = false,
-                ErrorMessage = "Active Directory is not configured."
+                ErrorMessage = "Active Directory is not configured.",
             };
+        }
+
+        var ldapServer = server.Replace("ldap://", "").Replace("ldaps://", "");
+        var ldapIdentifier = new LdapDirectoryIdentifier(ldapServer, port);
+
+        // Determine if input is an email address
+        var isEmail = usernameOrEmail.Contains('@');
+        var username = usernameOrEmail;
+
+        // If email provided, resolve to sAMAccountName first
+        if (
+            isEmail
+            && !string.IsNullOrEmpty(serviceAccount)
+            && !string.IsNullOrEmpty(servicePassword)
+        )
+        {
+            var resolvedUsername = await ResolveEmailToUsernameAsync(
+                ldapIdentifier,
+                useSSL,
+                baseDn,
+                domain,
+                serviceAccount,
+                servicePassword,
+                usernameOrEmail
+            );
+
+            if (resolvedUsername == null)
+            {
+                return new AdAuthResult
+                {
+                    Success = false,
+                    ErrorMessage = "No user found with that email address.",
+                };
+            }
+
+            username = resolvedUsername;
+            _logger.LogInformation(
+                "Resolved email {Email} to username {Username}",
+                usernameOrEmail,
+                username
+            );
+        }
+        else if (isEmail)
+        {
+            // No service account configured, try using email prefix as username
+            username = usernameOrEmail.Split('@')[0];
+            _logger.LogInformation(
+                "No service account configured, using email prefix as username: {Username}",
+                username
+            );
         }
 
         try
         {
-            var ldapServer = server.Replace("ldap://", "").Replace("ldaps://", "");
-            var ldapIdentifier = new LdapDirectoryIdentifier(ldapServer, port);
-
-            var userDn = !string.IsNullOrEmpty(domain)
-                ? $"{domain}\\{username}"
-                : username;
+            var userDn = !string.IsNullOrEmpty(domain) ? $"{domain}\\{username}" : username;
 
             var credential = new NetworkCredential(userDn, password);
 
             using var connection = new LdapConnection(ldapIdentifier)
             {
                 AuthType = AuthType.Basic,
-                Credential = credential
+                Credential = credential,
             };
 
             connection.SessionOptions.ProtocolVersion = 3;
@@ -81,7 +133,12 @@ public class AdAuthService
 
             connection.Bind();
 
-            var userDetails = await GetUserDetailsFromAdAsync(connection, baseDn, username);
+            var userDetails = await GetUserDetailsFromAdAsync(
+                connection,
+                baseDn,
+                username,
+                isEmail ? usernameOrEmail : null
+            );
 
             return new AdAuthResult
             {
@@ -89,7 +146,7 @@ public class AdAuthService
                 Username = username,
                 DisplayName = userDetails?.DisplayName ?? username,
                 Email = userDetails?.Email ?? $"{username}@ktrn.rw",
-                Department = userDetails?.Department
+                Department = userDetails?.Department,
             };
         }
         catch (LdapException ex)
@@ -98,27 +155,100 @@ public class AdAuthService
             {
                 49 => "Invalid username or password.",
                 81 => "Cannot connect to the Active Directory server.",
-                _ => $"Authentication failed (Error {ex.ErrorCode}). Please check your credentials."
+                _ =>
+                    $"Authentication failed (Error {ex.ErrorCode}). Please check your credentials.",
             };
 
-            return new AdAuthResult
-            {
-                Success = false,
-                ErrorMessage = errorMessage
-            };
+            return new AdAuthResult { Success = false, ErrorMessage = errorMessage };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected error during AD authentication for user {Username}", username);
+            _logger.LogError(
+                ex,
+                "Unexpected error during AD authentication for user {Username}",
+                username
+            );
             return new AdAuthResult
             {
                 Success = false,
-                ErrorMessage = $"An unexpected error occurred: {ex.Message}"
+                ErrorMessage = $"An unexpected error occurred: {ex.Message}",
             };
         }
     }
 
-    private Task<AdUserDetails?> GetUserDetailsFromAdAsync(LdapConnection connection, string? baseDn, string username)
+    /// <summary>
+    /// Resolves an email address to a sAMAccountName using a service account
+    /// </summary>
+    private async Task<string?> ResolveEmailToUsernameAsync(
+        LdapDirectoryIdentifier ldapIdentifier,
+        bool useSSL,
+        string? baseDn,
+        string? domain,
+        string serviceAccount,
+        string servicePassword,
+        string email
+    )
+    {
+        if (string.IsNullOrEmpty(baseDn))
+        {
+            return null;
+        }
+
+        try
+        {
+            var serviceUserDn = !string.IsNullOrEmpty(domain)
+                ? $"{domain}\\{serviceAccount}"
+                : serviceAccount;
+            var credential = new NetworkCredential(serviceUserDn, servicePassword);
+
+            using var connection = new LdapConnection(ldapIdentifier)
+            {
+                AuthType = AuthType.Basic,
+                Credential = credential,
+            };
+
+            connection.SessionOptions.ProtocolVersion = 3;
+            connection.SessionOptions.SecureSocketLayer = useSSL;
+
+            if (!useSSL)
+            {
+                connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
+            }
+
+            connection.Bind();
+
+            // Search by mail or userPrincipalName
+            var escapedEmail = EscapeLdapSearchFilter(email);
+            var searchFilter = $"(|(mail={escapedEmail})(userPrincipalName={escapedEmail}))";
+            var searchRequest = new SearchRequest(
+                baseDn,
+                searchFilter,
+                SearchScope.Subtree,
+                "sAMAccountName"
+            );
+
+            var response = (SearchResponse)connection.SendRequest(searchRequest);
+
+            if (response.Entries.Count > 0)
+            {
+                var entry = response.Entries[0];
+                return GetAttributeValue(entry, "sAMAccountName");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not resolve email to username: {Error}", ex.Message);
+        }
+
+        return null;
+    }
+
+    private Task<AdUserDetails?> GetUserDetailsFromAdAsync(
+        LdapConnection connection,
+        string? baseDn,
+        string username,
+        string? originalEmail = null
+    )
     {
         if (string.IsNullOrEmpty(baseDn))
         {
@@ -132,7 +262,11 @@ public class AdAuthService
                 baseDn,
                 searchFilter,
                 SearchScope.Subtree,
-                "displayName", "mail", "department", "sAMAccountName", "userPrincipalName"
+                "displayName",
+                "mail",
+                "department",
+                "sAMAccountName",
+                "userPrincipalName"
             );
 
             var response = (SearchResponse)connection.SendRequest(searchRequest);
@@ -140,14 +274,16 @@ public class AdAuthService
             if (response.Entries.Count > 0)
             {
                 var entry = response.Entries[0];
-                return Task.FromResult<AdUserDetails?>(new AdUserDetails
-                {
-                    DisplayName = GetAttributeValue(entry, "displayName"),
-                    Email = GetAttributeValue(entry, "mail"),
-                    Department = GetAttributeValue(entry, "department"),
-                    SamAccountName = GetAttributeValue(entry, "sAMAccountName"),
-                    UserPrincipalName = GetAttributeValue(entry, "userPrincipalName")
-                });
+                return Task.FromResult<AdUserDetails?>(
+                    new AdUserDetails
+                    {
+                        DisplayName = GetAttributeValue(entry, "displayName"),
+                        Email = GetAttributeValue(entry, "mail"),
+                        Department = GetAttributeValue(entry, "department"),
+                        SamAccountName = GetAttributeValue(entry, "sAMAccountName"),
+                        UserPrincipalName = GetAttributeValue(entry, "userPrincipalName"),
+                    }
+                );
             }
         }
         catch (Exception ex)
@@ -174,12 +310,24 @@ public class AdAuthService
         {
             switch (c)
             {
-                case '\\': sb.Append("\\5c"); break;
-                case '*': sb.Append("\\2a"); break;
-                case '(': sb.Append("\\28"); break;
-                case ')': sb.Append("\\29"); break;
-                case '\0': sb.Append("\\00"); break;
-                default: sb.Append(c); break;
+                case '\\':
+                    sb.Append("\\5c");
+                    break;
+                case '*':
+                    sb.Append("\\2a");
+                    break;
+                case '(':
+                    sb.Append("\\28");
+                    break;
+                case ')':
+                    sb.Append("\\29");
+                    break;
+                case '\0':
+                    sb.Append("\\00");
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
             }
         }
         return sb.ToString();
@@ -187,7 +335,8 @@ public class AdAuthService
 
     public async Task<User> GetOrCreateUserAsync(AdAuthResult adResult)
     {
-        var email = adResult.Email?.ToLowerInvariant() ?? $"{adResult.Username}@ktrn.rw".ToLowerInvariant();
+        var email =
+            adResult.Email?.ToLowerInvariant() ?? $"{adResult.Username}@ktrn.rw".ToLowerInvariant();
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
 
         if (user == null)
@@ -199,7 +348,7 @@ public class AdAuthService
                 EmailVerified = true,
                 CreatedAt = DateTime.UtcNow,
                 IsActive = true,
-                LastLoginAt = DateTime.UtcNow
+                LastLoginAt = DateTime.UtcNow,
             };
             _db.Users.Add(user);
         }
@@ -208,7 +357,7 @@ public class AdAuthService
             user.LastLoginAt = DateTime.UtcNow;
             user.Name = adResult.DisplayName ?? user.Name;
         }
-        
+
         await _db.SaveChangesAsync();
         return user;
     }
@@ -229,7 +378,7 @@ public class AdAuthService
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim(JwtRegisteredClaimNames.Name, user.Name ?? user.Email),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim("auth_method", "active_directory")
+            new Claim("auth_method", "active_directory"),
         };
 
         var token = new JwtSecurityToken(

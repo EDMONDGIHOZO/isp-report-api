@@ -6,6 +6,7 @@ namespace isp_report_api.Services;
 public interface IIspReportService
 {
     Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter);
+    Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
 }
@@ -22,6 +23,13 @@ public class IspReportService : IIspReportService
     public async Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter)
     {
         return await _repository.GetMonthlyReportsAsync(filter);
+    }
+
+    public async Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(
+        IspReportFilter filter
+    )
+    {
+        return await _repository.GetMonthlyReportsAllIspsAsync(filter);
     }
 
     public async Task<IEnumerable<string>> GetAllIspNamesAsync()

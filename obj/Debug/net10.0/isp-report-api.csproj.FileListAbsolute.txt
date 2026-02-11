@@ -157,3 +157,16 @@
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/Oracle.ManagedDataAccess.dll
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/System.Diagnostics.PerformanceCounter.dll
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win/lib/net8.0/System.Diagnostics.PerformanceCounter.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/HarfBuzzSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/OxyPlot.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/OxyPlot.SkiaSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/SkiaSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/SkiaSharp.HarfBuzz.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/osx/native/libHarfBuzzSharp.dylib
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-arm64/native/libHarfBuzzSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-x64/native/libHarfBuzzSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-x86/native/libHarfBuzzSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/osx/native/libSkiaSharp.dylib
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-arm64/native/libSkiaSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-x64/native/libSkiaSharp.dll
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Debug/net10.0/runtimes/win-x86/native/libSkiaSharp.dll

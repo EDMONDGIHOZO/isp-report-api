@@ -8,6 +8,7 @@ namespace isp_report_api.Repository;
 public interface IIspReportRepository
 {
     Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter);
+    Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
 }
@@ -74,6 +75,78 @@ public class IspReportRepository : IIspReportRepository
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
         return await connection.QueryAsync<IspMonthlyReport>(sql.ToString(), parameters);
+    }
+
+    public async Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(
+        IspReportFilter filter
+    )
+    {
+        var sql = new StringBuilder(
+            @"
+            SELECT 
+                SP_NAME AS Isp,
+                TO_CHAR(STATE_DATE, 'YYYYMM') AS UDay,
+                COUNT(ACC_NBR) AS Purchase,
+                SUM(SUBS_AMOUNT) / 100 AS Amount
+            FROM RB_REPORT.REPORT_ALL_IPP
+            WHERE SP_NAME IS NOT NULL"
+        );
+
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            sql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            sql.Append(
+                " AND TO_CHAR(STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            sql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+        else
+        {
+            sql.Append(
+                " AND TO_CHAR(STATE_DATE, 'YYYYMM') <= TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')"
+            );
+        }
+
+        sql.Append(
+            @"
+            GROUP BY SP_NAME, TO_CHAR(STATE_DATE, 'YYYYMM')
+            ORDER BY SP_NAME ASC, TO_CHAR(STATE_DATE, 'YYYYMM') ASC"
+        );
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+
+        var rows = await connection.QueryAsync<IspMonthlyReportSeriesRow>(
+            sql.ToString(),
+            parameters
+        );
+
+        return rows
+            .GroupBy(r => r.Isp)
+            .Select(g => new IspMonthlyReportSeries
+            {
+                Isp = g.Key,
+                Points = g
+                    .Select(r => new IspMonthlyReport
+                    {
+                        UDay = r.UDay,
+                        Purchase = r.Purchase,
+                        Amount = r.Amount,
+                    })
+                    .OrderBy(p => p.UDay)
+                    .ToList(),
+            });
     }
 
     public async Task<IEnumerable<string>> GetAllIspNamesAsync()
@@ -224,3 +297,12 @@ public class IspReportRepository : IIspReportRepository
         };
     }
 }
+
+file class IspMonthlyReportSeriesRow
+{
+    public string Isp { get; set; } = string.Empty;
+    public string UDay { get; set; } = string.Empty;
+    public int Purchase { get; set; }
+    public decimal Amount { get; set; }
+}
+
