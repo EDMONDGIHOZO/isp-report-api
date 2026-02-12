@@ -11,6 +11,9 @@ public interface IIspReportRepository
     Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
+    Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter);
+    Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
+    Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync();
 }
 
 public class IspReportRepository : IIspReportRepository
@@ -296,6 +299,139 @@ public class IspReportRepository : IIspReportRepository
             LowestMonth = monthStats.LastOrDefault(),
         };
     }
+
+    public async Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter)
+    {
+        var sql = new StringBuilder(
+            @"
+            SELECT 
+                TO_CHAR(a.STATE_DATE, 'YYYYMM') AS Period,
+                b.sp_name AS Isp,
+                ROUND(SUM(a.charge / 100), 0) AS EWallet
+            FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+            WHERE a.acct_id = b.virt_acct_id
+              AND b.sp_id > 1"
+        );
+
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(SYSDATE - 365, 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+
+        if (!string.IsNullOrEmpty(filter.IspName))
+        {
+            sql.Append(" AND b.sp_name = :IspName");
+            parameters.Add("IspName", filter.IspName);
+        }
+
+        sql.Append(
+            @"
+            GROUP BY TO_CHAR(a.STATE_DATE, 'YYYYMM'), b.sp_name
+            ORDER BY TO_CHAR(a.STATE_DATE, 'YYYYMM') ASC"
+        );
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        return await connection.QueryAsync<PostpaidReport>(sql.ToString(), parameters);
+    }
+
+    public async Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(
+        IspReportFilter filter
+    )
+    {
+        var sql = new StringBuilder(
+            @"
+            SELECT 
+                TO_CHAR(a.STATE_DATE, 'YYYYMM') AS Period,
+                b.sp_name AS Isp,
+                ROUND(SUM(a.charge / 100), 0) AS EWallet
+            FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+            WHERE a.acct_id = b.virt_acct_id
+              AND b.sp_id > 1
+              AND b.sp_name IS NOT NULL"
+        );
+
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(SYSDATE - 365, 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+
+        sql.Append(
+            @"
+            GROUP BY TO_CHAR(a.STATE_DATE, 'YYYYMM'), b.sp_name
+            ORDER BY b.sp_name ASC, TO_CHAR(a.STATE_DATE, 'YYYYMM') ASC"
+        );
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+
+        var rows = await connection.QueryAsync<PostpaidReportSeriesRow>(
+            sql.ToString(),
+            parameters
+        );
+
+        return rows
+            .GroupBy(r => r.Isp)
+            .Select(g => new PostpaidReportSeries
+            {
+                Isp = g.Key,
+                Points = g
+                    .Select(r => new PostpaidReport
+                    {
+                        Period = r.Period,
+                        Isp = r.Isp,
+                        EWallet = r.EWallet,
+                    })
+                    .OrderBy(p => p.Period)
+                    .ToList(),
+            });
+    }
+
+    public async Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync()
+    {
+        const string sql =
+            @"
+            SELECT DISTINCT b.sp_name
+            FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+            WHERE a.acct_id = b.virt_acct_id
+              AND b.sp_id > 1
+              AND b.sp_name IS NOT NULL
+            ORDER BY b.sp_name ASC";
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        return await connection.QueryAsync<string>(sql);
+    }
 }
 
 file class IspMonthlyReportSeriesRow
@@ -304,5 +440,12 @@ file class IspMonthlyReportSeriesRow
     public string UDay { get; set; } = string.Empty;
     public int Purchase { get; set; }
     public decimal Amount { get; set; }
+}
+
+file class PostpaidReportSeriesRow
+{
+    public string Period { get; set; } = string.Empty;
+    public string Isp { get; set; } = string.Empty;
+    public decimal EWallet { get; set; }
 }
 

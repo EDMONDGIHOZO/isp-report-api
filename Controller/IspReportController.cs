@@ -169,4 +169,79 @@ public class IspReportController : ControllerBase
             );
         }
     }
+
+    [HttpGet("postpaid/monthly")]
+    [Authorize]
+    public async Task<IActionResult> GetPostpaidReports(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string? isp
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = isp,
+            };
+
+            var reports = await _ispReportService.GetPostpaidReportsAsync(filter);
+            return Ok(reports);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch postpaid reports", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("postpaid/monthly-all")]
+    [Authorize]
+    public async Task<IActionResult> GetPostpaidReportsAllIsps(
+        [FromQuery] string? from,
+        [FromQuery] string? to
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = null,
+            };
+
+            var series = await _ispReportService.GetPostpaidReportsAllIspsAsync(filter);
+            return Ok(series);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch postpaid reports for all ISPs", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("postpaid/isps")]
+    [Authorize]
+    public async Task<IActionResult> GetAllPostpaidIspNames()
+    {
+        try
+        {
+            var isps = await _ispReportService.GetAllPostpaidIspNamesAsync();
+            return Ok(isps);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch postpaid ISP names", Details = ex.Message }
+            );
+        }
+    }
 }

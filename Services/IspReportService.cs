@@ -9,6 +9,9 @@ public interface IIspReportService
     Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
+    Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter);
+    Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
+    Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync();
 }
 
 public class IspReportService : IIspReportService
@@ -40,5 +43,22 @@ public class IspReportService : IIspReportService
     public async Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter)
     {
         return await _repository.GetPrepaidStatsAsync(filter);
+    }
+
+    public async Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter)
+    {
+        return await _repository.GetPostpaidReportsAsync(filter);
+    }
+
+    public async Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(
+        IspReportFilter filter
+    )
+    {
+        return await _repository.GetPostpaidReportsAllIspsAsync(filter);
+    }
+
+    public async Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync()
+    {
+        return await _repository.GetAllPostpaidIspNamesAsync();
     }
 }
