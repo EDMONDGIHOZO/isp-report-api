@@ -300,6 +300,7 @@ public class AdAuthService
         {
             return entry.Attributes[attributeName][0]?.ToString();
         }
+
         return null;
     }
 
@@ -330,6 +331,7 @@ public class AdAuthService
                     break;
             }
         }
+
         return sb.ToString();
     }
 

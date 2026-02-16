@@ -35,6 +35,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddSingleton<IOracleConnectionFactory, OracleConnectionFactory>();
 builder.Services.AddScoped<IOracleRepository, OracleRepository>();
 builder.Services.AddScoped<IIspReportRepository, IspReportRepository>();
+builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<IIspReportService, IspReportService>();
 builder.Services.AddScoped<IIspReportPdfService, IspReportPdfService>();
 
@@ -352,6 +353,30 @@ using (var scope = app.Services.CreateScope())
         logger.LogError(ex, "An error occurred while migrating the database.");
     }
 }
+
+// Start background cache cleanup service
+var cacheCleanupInterval = TimeSpan.FromHours(
+    builder.Configuration.GetValue<int>("Cache:CleanupIntervalHours", 1)
+);
+_ = Task.Run(async () =>
+{
+    await Task.Delay(TimeSpan.FromMinutes(5)); // Wait 5 minutes after startup
+    while (true)
+    {
+        try
+        {
+            await Task.Delay(cacheCleanupInterval);
+            using var scope = app.Services.CreateScope();
+            var cacheService = scope.ServiceProvider.GetRequiredService<ICacheService>();
+            await cacheService.ClearExpiredAsync();
+        }
+        catch (Exception ex)
+        {
+            var logger = app.Services.GetRequiredService<ILogger<Program>>();
+            logger.LogError(ex, "Error in cache cleanup background task");
+        }
+    }
+});
 
 app.Run();
 

@@ -2,6 +2,7 @@ using isp_report_api.Models;
 using isp_report_api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace isp_report_api.Controller;
 
@@ -26,7 +27,8 @@ public class IspReportController : ControllerBase
     public async Task<IActionResult> GetMonthlyReports(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        [FromQuery] string? isp
+        [FromQuery] string? isp,
+        [FromQuery] bool includeCurrentMonthWeekly = false
     )
     {
         try
@@ -36,6 +38,7 @@ public class IspReportController : ControllerBase
                 FromPeriod = from,
                 ToPeriod = to,
                 IspName = isp,
+                IncludeCurrentMonthWeekly = includeCurrentMonthWeekly,
             };
 
             var reports = await _ispReportService.GetMonthlyReportsAsync(filter);
@@ -124,6 +127,30 @@ public class IspReportController : ControllerBase
         });
     }
 
+    [HttpDelete("cache")]
+    [Authorize]
+    public async Task<IActionResult> ClearCache([FromQuery] string? type)
+    {
+        try
+        {
+            var cacheService = HttpContext.RequestServices.GetRequiredService<ICacheService>();
+            
+            if (!string.IsNullOrEmpty(type))
+            {
+                await cacheService.RemoveByTypeAsync(type);
+                return Ok(new { Message = $"Cleared cache for type: {type}" });
+            }
+            
+            // Clear all expired entries
+            await cacheService.ClearExpiredAsync();
+            return Ok(new { Message = "Cleared expired cache entries" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { Error = "Failed to clear cache", Details = ex.Message });
+        }
+    }
+
     [HttpGet("isps")]
     [Authorize]
     public async Task<IActionResult> GetAllIspNames()
@@ -147,6 +174,36 @@ public class IspReportController : ControllerBase
     public async Task<IActionResult> GetPrepaidStats(
         [FromQuery] string? from,
         [FromQuery] string? to,
+        [FromQuery] string? isp,
+        [FromQuery] bool includeCurrentMonthWeekly = false
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = isp,
+                IncludeCurrentMonthWeekly = includeCurrentMonthWeekly,
+            };
+            var stats = await _ispReportService.GetPrepaidStatsAsync(filter);
+            return Ok(stats);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch prepaid stats", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("prepaid-retailers")]
+    [Authorize]
+    public async Task<IActionResult> GetPrepaidRetailerDistribution(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
         [FromQuery] string? isp
     )
     {
@@ -158,14 +215,15 @@ public class IspReportController : ControllerBase
                 ToPeriod = to,
                 IspName = isp,
             };
-            var stats = await _ispReportService.GetPrepaidStatsAsync(filter);
+
+            var stats = await _ispReportService.GetPrepaidRetailerDistributionAsync(filter);
             return Ok(stats);
         }
         catch (Exception ex)
         {
             return StatusCode(
                 500,
-                new { Error = "Failed to fetch prepaid stats", Details = ex.Message }
+                new { Error = "Failed to fetch prepaid retailer distribution", Details = ex.Message }
             );
         }
     }
@@ -241,6 +299,71 @@ public class IspReportController : ControllerBase
             return StatusCode(
                 500,
                 new { Error = "Failed to fetch postpaid ISP names", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("postpaid-stats")]
+    [Authorize]
+    public async Task<IActionResult> GetPostpaidStats(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string? isp
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = isp,
+            };
+            var stats = await _ispReportService.GetPostpaidStatsAsync(filter);
+            return Ok(stats);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch postpaid stats", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("postpaid/monthly-all-pdf")]
+    [Authorize]
+    public async Task<IActionResult> GetPostpaidReportsAllIspsPdf(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string chartType = "line"
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = null,
+            };
+
+            var pdfBytes = await _pdfService.GeneratePostpaidAllIspsPdfAsync(filter, chartType);
+
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+            var fileName = $"postpaid-sales-all-isps-{timestamp}.pdf";
+
+            return File(pdfBytes, "application/pdf", fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to generate postpaid PDF report", Details = ex.Message }
             );
         }
     }

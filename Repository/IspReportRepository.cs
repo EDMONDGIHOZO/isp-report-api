@@ -10,10 +10,12 @@ public interface IIspReportRepository
     Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter);
     Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
+    Task<IEnumerable<IspStat>> GetPrepaidRetailerDistributionAsync(IspReportFilter filter);
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync();
+    Task<PostpaidStats> GetPostpaidStatsAsync(IspReportFilter filter);
 }
 
 public class IspReportRepository : IIspReportRepository
@@ -27,7 +29,42 @@ public class IspReportRepository : IIspReportRepository
 
     public async Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter)
     {
-        var sql = new StringBuilder(
+        // If weekly view for current month is requested, return weekly data
+        if (filter.IncludeCurrentMonthWeekly)
+        {
+            var currentMonth = DateTime.Now.ToString("yyyyMM");
+            var sql = new StringBuilder(
+                @"
+                SELECT 
+                    'Week ' || TO_NUMBER(TO_CHAR(TRUNC(STATE_DATE, 'IW'), 'WW')) || ' (' || TO_CHAR(TRUNC(STATE_DATE, 'IW'), 'DD Mon') || ' - ' || TO_CHAR(TRUNC(STATE_DATE, 'IW') + 6, 'DD Mon') || ')' AS UDay,
+                    COUNT(ACC_NBR) AS Purchase,
+                    SUM(SUBS_AMOUNT) / 100 AS Amount
+                FROM RB_REPORT.REPORT_ALL_IPP
+                WHERE TO_CHAR(STATE_DATE, 'YYYYMM') = :CurrentMonth"
+            );
+
+            var parameters = new DynamicParameters();
+            parameters.Add("CurrentMonth", currentMonth);
+
+            if (!string.IsNullOrEmpty(filter.IspName))
+            {
+                sql.Append(" AND SP_NAME = :IspName");
+                parameters.Add("IspName", filter.IspName);
+            }
+
+            sql.Append(
+                @"
+                GROUP BY TRUNC(STATE_DATE, 'IW')
+                ORDER BY TRUNC(STATE_DATE, 'IW') ASC"
+            );
+
+            using var weeklyConnection = _connectionFactory.CreateConnection();
+            weeklyConnection.Open();
+            return await weeklyConnection.QueryAsync<IspMonthlyReport>(sql.ToString(), parameters);
+        }
+
+        // Normal monthly view (excludes current month)
+        var monthlySql = new StringBuilder(
             @"
             SELECT 
                 TO_CHAR(STATE_DATE, 'YYYYMM') AS UDay,
@@ -37,39 +74,41 @@ public class IspReportRepository : IIspReportRepository
             WHERE 1=1"
         );
 
-        var parameters = new DynamicParameters();
+        var monthlyParameters = new DynamicParameters();
 
         if (!string.IsNullOrEmpty(filter.FromPeriod))
         {
-            sql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') >= :FromPeriod");
-            parameters.Add("FromPeriod", filter.FromPeriod);
+            monthlySql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            monthlyParameters.Add("FromPeriod", filter.FromPeriod);
         }
         else
         {
-            sql.Append(
+            // 13 completed months back (exclude current incomplete month)
+            monthlySql.Append(
                 " AND TO_CHAR(STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
             );
         }
 
         if (!string.IsNullOrEmpty(filter.ToPeriod))
         {
-            sql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') <= :ToPeriod");
-            parameters.Add("ToPeriod", filter.ToPeriod);
+            monthlySql.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            monthlyParameters.Add("ToPeriod", filter.ToPeriod);
         }
         else
         {
-            sql.Append(
-                " AND TO_CHAR(STATE_DATE, 'YYYYMM') <= TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')"
+            // Exclude current month (incomplete); show up to last completed month
+            monthlySql.Append(
+                " AND TO_CHAR(STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
             );
         }
 
         if (!string.IsNullOrEmpty(filter.IspName))
         {
-            sql.Append(" AND SP_NAME = :IspName");
-            parameters.Add("IspName", filter.IspName);
+            monthlySql.Append(" AND SP_NAME = :IspName");
+            monthlyParameters.Add("IspName", filter.IspName);
         }
 
-        sql.Append(
+        monthlySql.Append(
             @"
             GROUP BY TO_CHAR(STATE_DATE, 'YYYYMM')
             ORDER BY TO_CHAR(STATE_DATE, 'YYYYMM') ASC"
@@ -77,7 +116,7 @@ public class IspReportRepository : IIspReportRepository
 
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
-        return await connection.QueryAsync<IspMonthlyReport>(sql.ToString(), parameters);
+        return await connection.QueryAsync<IspMonthlyReport>(monthlySql.ToString(), monthlyParameters);
     }
 
     public async Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(
@@ -104,6 +143,7 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // 13 completed months back (exclude current incomplete month)
             sql.Append(
                 " AND TO_CHAR(STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
             );
@@ -116,8 +156,9 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // Exclude current month (incomplete); show up to last completed month
             sql.Append(
-                " AND TO_CHAR(STATE_DATE, 'YYYYMM') <= TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')"
+                " AND TO_CHAR(STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
             );
         }
 
@@ -166,11 +207,14 @@ public class IspReportRepository : IIspReportRepository
         return await connection.QueryAsync<string>(sql);
     }
 
-    public async Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter)
+    public async Task<IEnumerable<IspStat>> GetPrepaidRetailerDistributionAsync(
+        IspReportFilter filter
+    )
     {
-        var whereClause = new StringBuilder("WHERE 1=1");
+        var whereClause = new StringBuilder("WHERE SP_NAME IS NOT NULL");
         var parameters = new DynamicParameters();
 
+        // We ignore weekly toggle here and always work on monthly aggregates
         if (!string.IsNullOrEmpty(filter.FromPeriod))
         {
             whereClause.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') >= :FromPeriod");
@@ -178,6 +222,7 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // 13 completed months back (exclude current incomplete month)
             whereClause.Append(
                 " AND TO_CHAR(STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
             );
@@ -190,9 +235,73 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // Exclude current month (incomplete); show up to last completed month
             whereClause.Append(
-                " AND TO_CHAR(STATE_DATE, 'YYYYMM') <= TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')"
+                " AND TO_CHAR(STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
             );
+        }
+
+        if (!string.IsNullOrEmpty(filter.IspName))
+        {
+            whereClause.Append(" AND SP_NAME = :IspName");
+            parameters.Add("IspName", filter.IspName);
+        }
+
+        var sql =
+            $@"
+            SELECT 
+                SP_NAME AS Name,
+                COUNT(ACC_NBR) AS Purchases,
+                SUM(SUBS_AMOUNT) / 100 AS Amount
+            FROM RB_REPORT.REPORT_ALL_IPP
+            {whereClause}
+            GROUP BY SP_NAME
+            ORDER BY SUM(SUBS_AMOUNT) DESC";
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        return await connection.QueryAsync<IspStat>(sql, parameters);
+    }
+
+    public async Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter)
+    {
+        var whereClause = new StringBuilder("WHERE 1=1");
+        var parameters = new DynamicParameters();
+
+        // If weekly view for current month is requested, limit to current month only
+        if (filter.IncludeCurrentMonthWeekly)
+        {
+            var currentMonth = DateTime.Now.ToString("yyyyMM");
+            whereClause.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') = :CurrentMonth");
+            parameters.Add("CurrentMonth", currentMonth);
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(filter.FromPeriod))
+            {
+                whereClause.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') >= :FromPeriod");
+                parameters.Add("FromPeriod", filter.FromPeriod);
+            }
+            else
+            {
+                // 13 completed months back (exclude current incomplete month)
+                whereClause.Append(
+                    " AND TO_CHAR(STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
+                );
+            }
+
+            if (!string.IsNullOrEmpty(filter.ToPeriod))
+            {
+                whereClause.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') <= :ToPeriod");
+                parameters.Add("ToPeriod", filter.ToPeriod);
+            }
+            else
+            {
+                // Exclude current month (incomplete); show up to last completed month
+                whereClause.Append(
+                    " AND TO_CHAR(STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+                );
+            }
         }
 
         if (!string.IsNullOrEmpty(filter.IspName))
@@ -302,6 +411,60 @@ public class IspReportRepository : IIspReportRepository
 
     public async Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter)
     {
+        var parameters = new DynamicParameters();
+
+        // When no ISP filter: return one row per period with EWallet summed across all ISPs
+        if (string.IsNullOrEmpty(filter.IspName))
+        {
+            var sqlAll = new StringBuilder(
+                @"
+                SELECT 
+                    TO_CHAR(a.STATE_DATE, 'YYYYMM') AS Period,
+                    'All ISPs' AS Isp,
+                    ROUND(SUM(a.charge / 100), 0) AS EWallet
+                FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+                WHERE a.acct_id = b.virt_acct_id
+                  AND b.sp_id > 1"
+            );
+
+            if (!string.IsNullOrEmpty(filter.FromPeriod))
+            {
+                sqlAll.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= :FromPeriod");
+                parameters.Add("FromPeriod", filter.FromPeriod);
+            }
+            else
+            {
+                // 13 completed months back (exclude current incomplete month)
+                sqlAll.Append(
+                    " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
+                );
+            }
+
+            if (!string.IsNullOrEmpty(filter.ToPeriod))
+            {
+                sqlAll.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
+                parameters.Add("ToPeriod", filter.ToPeriod);
+            }
+            else
+            {
+                // Exclude current month (incomplete); show up to last completed month
+                sqlAll.Append(
+                    " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+                );
+            }
+
+            sqlAll.Append(
+                @"
+                GROUP BY TO_CHAR(a.STATE_DATE, 'YYYYMM')
+                ORDER BY TO_CHAR(a.STATE_DATE, 'YYYYMM') ASC"
+            );
+
+            using var connection = _connectionFactory.CreateConnection();
+            connection.Open();
+            return await connection.QueryAsync<PostpaidReport>(sqlAll.ToString(), parameters);
+        }
+
+        // When ISP filter is set: return one row per period for that ISP only
         var sql = new StringBuilder(
             @"
             SELECT 
@@ -310,10 +473,9 @@ public class IspReportRepository : IIspReportRepository
                 ROUND(SUM(a.charge / 100), 0) AS EWallet
             FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
             WHERE a.acct_id = b.virt_acct_id
-              AND b.sp_id > 1"
+              AND b.sp_id > 1
+              AND b.sp_name = :IspName"
         );
-
-        var parameters = new DynamicParameters();
 
         if (!string.IsNullOrEmpty(filter.FromPeriod))
         {
@@ -322,8 +484,9 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // 13 completed months back (exclude current incomplete month)
             sql.Append(
-                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(SYSDATE - 365, 'YYYYMM')"
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
             );
         }
 
@@ -332,12 +495,15 @@ public class IspReportRepository : IIspReportRepository
             sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
             parameters.Add("ToPeriod", filter.ToPeriod);
         }
-
-        if (!string.IsNullOrEmpty(filter.IspName))
+        else
         {
-            sql.Append(" AND b.sp_name = :IspName");
-            parameters.Add("IspName", filter.IspName);
+            // Exclude current month (incomplete); show up to last completed month
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+            );
         }
+
+        parameters.Add("IspName", filter.IspName);
 
         sql.Append(
             @"
@@ -345,9 +511,9 @@ public class IspReportRepository : IIspReportRepository
             ORDER BY TO_CHAR(a.STATE_DATE, 'YYYYMM') ASC"
         );
 
-        using var connection = _connectionFactory.CreateConnection();
-        connection.Open();
-        return await connection.QueryAsync<PostpaidReport>(sql.ToString(), parameters);
+        using var connection2 = _connectionFactory.CreateConnection();
+        connection2.Open();
+        return await connection2.QueryAsync<PostpaidReport>(sql.ToString(), parameters);
     }
 
     public async Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(
@@ -375,8 +541,9 @@ public class IspReportRepository : IIspReportRepository
         }
         else
         {
+            // 13 completed months back (exclude current incomplete month)
             sql.Append(
-                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(SYSDATE - 365, 'YYYYMM')"
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
             );
         }
 
@@ -384,6 +551,13 @@ public class IspReportRepository : IIspReportRepository
         {
             sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
             parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+        else
+        {
+            // Exclude current month (incomplete); show up to last completed month
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+            );
         }
 
         sql.Append(
@@ -431,6 +605,126 @@ public class IspReportRepository : IIspReportRepository
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
         return await connection.QueryAsync<string>(sql);
+    }
+
+    public async Task<PostpaidStats> GetPostpaidStatsAsync(IspReportFilter filter)
+    {
+        var whereClause = new StringBuilder(
+            @"FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+            WHERE a.acct_id = b.virt_acct_id
+              AND b.sp_id > 1"
+        );
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            whereClause.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            // 13 completed months back (exclude current incomplete month)
+            whereClause.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            whereClause.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+        else
+        {
+            // Exclude current month (incomplete); show up to last completed month
+            whereClause.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.IspName))
+        {
+            whereClause.Append(" AND b.sp_name = :IspName");
+            parameters.Add("IspName", filter.IspName);
+        }
+
+        var totalsSql =
+            $@"
+            SELECT 
+                ROUND(SUM(a.charge / 100), 0) AS TotalEWallet
+            {whereClause}";
+
+        var ispStatsByEWalletSql =
+            $@"
+            SELECT 
+                b.sp_name AS Name,
+                ROUND(SUM(a.charge / 100), 0) AS Amount,
+                0 AS Purchases
+            {whereClause}
+            AND b.sp_name IS NOT NULL
+            GROUP BY b.sp_name
+            ORDER BY Amount DESC";
+
+        var monthStatsSql =
+            $@"
+            SELECT 
+                TO_CHAR(a.STATE_DATE, 'YYYYMM') AS Month,
+                ROUND(SUM(a.charge / 100), 0) AS Amount,
+                0 AS Purchases
+            {whereClause}
+            GROUP BY TO_CHAR(a.STATE_DATE, 'YYYYMM')
+            ORDER BY Amount DESC";
+
+        var monthlyEWalletSql =
+            $@"
+            SELECT 
+                TO_CHAR(a.STATE_DATE, 'YYYYMM') AS Month,
+                ROUND(SUM(a.charge / 100), 0) AS EWallet
+            {whereClause}
+            GROUP BY TO_CHAR(a.STATE_DATE, 'YYYYMM')
+            ORDER BY TO_CHAR(a.STATE_DATE, 'YYYYMM') DESC";
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+
+        var totalEWallet = await connection.QueryFirstOrDefaultAsync<decimal>(totalsSql, parameters);
+        var ispStatsByEWallet = (
+            await connection.QueryAsync<IspStat>(ispStatsByEWalletSql, parameters)
+        ).ToList();
+        var monthStats = (
+            await connection.QueryAsync<MonthStat>(monthStatsSql, parameters)
+        ).ToList();
+        var monthlyEWallet = (
+            await connection.QueryAsync<(string Month, decimal EWallet)>(
+                monthlyEWalletSql,
+                parameters
+            )
+        ).ToList();
+
+        var monthCount = monthStats.Count;
+        var averageEWallet = monthCount > 0 ? totalEWallet / monthCount : 0;
+
+        decimal monthOverMonthGrowth = 0;
+        if (monthlyEWallet.Count >= 2)
+        {
+            var lastMonth = monthlyEWallet[0].EWallet;
+            var previousMonth = monthlyEWallet[1].EWallet;
+            if (previousMonth > 0)
+            {
+                monthOverMonthGrowth = ((lastMonth - previousMonth) / previousMonth) * 100;
+            }
+        }
+
+        return new PostpaidStats
+        {
+            TotalEWallet = totalEWallet,
+            AverageEWallet = Math.Round(averageEWallet, 2),
+            MonthOverMonthGrowth = Math.Round(monthOverMonthGrowth, 2),
+            TopIspByEWallet = ispStatsByEWallet.FirstOrDefault(),
+            LowestIsp = ispStatsByEWallet.LastOrDefault(),
+            HighestMonth = monthStats.FirstOrDefault(),
+            LowestMonth = monthStats.LastOrDefault(),
+        };
     }
 }
 

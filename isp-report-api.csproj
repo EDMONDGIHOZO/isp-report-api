@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <Folder Include="Controller\" />
+    <Folder Include="db_structure\" />
     <Folder Include="Repository\" />
     <Folder Include="Services\" />
   </ItemGroup>
