@@ -10,6 +10,8 @@ public class AppDbContext : DbContext
     }
 
     public DbSet<User> Users { get; set; }
+    public DbSet<Role> Roles { get; set; }
+    public DbSet<RolePage> RolePages { get; set; }
     public DbSet<OtpCode> OtpCodes { get; set; }
     public DbSet<CacheEntry> CacheEntries { get; set; }
 
@@ -31,5 +33,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<CacheEntry>()
             .HasIndex(c => c.CacheType);
+
+        modelBuilder.Entity<RolePage>()
+            .HasIndex(rp => new { rp.RoleId, rp.PageKey })
+            .IsUnique();
     }
 }

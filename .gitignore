@@ -2,4 +2,4 @@ appsettings.json
 appsettings.Development.json
 publish
 .DS_store
-db_structure
+# db_structure

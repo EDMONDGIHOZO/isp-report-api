@@ -13,6 +13,9 @@ public interface IIspReportPdfService
 {
     Task<byte[]> GenerateAllIspsPdfAsync(IspReportFilter filter, string chartType);
     Task<byte[]> GeneratePostpaidAllIspsPdfAsync(IspReportFilter filter, string chartType);
+    Task<byte[]> GenerateTrafficAllIspsPdfAsync(IspReportFilter filter);
+    Task<byte[]> GenerateWeeklyMatrixPdfAsync(string? isp, string? weeksFilter);
+    Task<byte[]> GenerateProductPivotPdfAsync(string ispName);
     int ClearCache();
     string GetCacheDirectory();
 }
@@ -20,6 +23,8 @@ public interface IIspReportPdfService
 public class IspReportPdfService : IIspReportPdfService
 {
     private readonly IIspReportRepository _repository;
+    private readonly ISalesRepository _salesRepository;
+    private readonly IProductSalesRepository _productSalesRepository;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<IspReportPdfService> _logger;
 
@@ -30,11 +35,15 @@ public class IspReportPdfService : IIspReportPdfService
 
     public IspReportPdfService(
         IIspReportRepository repository,
+        ISalesRepository salesRepository,
+        IProductSalesRepository productSalesRepository,
         IWebHostEnvironment env,
         ILogger<IspReportPdfService> logger
     )
     {
         _repository = repository;
+        _salesRepository = salesRepository;
+        _productSalesRepository = productSalesRepository;
         _env = env;
         _logger = logger;
     }
@@ -179,6 +188,275 @@ public class IspReportPdfService : IIspReportPdfService
         return pdfBytes;
     }
 
+    public async Task<byte[]> GenerateTrafficAllIspsPdfAsync(IspReportFilter filter)
+    {
+        // No heavy caching for traffic initially; reuse monthly-style cache key
+        var cacheKey = BuildCacheKey(filter, "traffic");
+        var cachedPath = Path.Combine(CacheDir, $"{cacheKey}.pdf");
+
+        if (File.Exists(cachedPath))
+        {
+            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(cachedPath);
+            if (age.TotalDays < 1)
+            {
+                _logger.LogInformation("Returning cached traffic PDF: {Path}", cachedPath);
+                return await File.ReadAllBytesAsync(cachedPath);
+            }
+        }
+
+        var allSeries = (await _repository.GetTrafficDailyAllIspsAsync(filter)).ToList();
+
+        if (allSeries.Count == 0)
+            throw new InvalidOperationException("No traffic data available for the given filter.");
+
+        var combinedPoints = allSeries
+            .SelectMany(s => s.Points)
+            .GroupBy(p => p.UDay)
+            .Select(g => new TrafficReport
+            {
+                UDay = g.Key,
+                Isp = "All ISPs",
+                Subs = g.Sum(p => p.Subs),
+                UsgGb = g.Sum(p => p.UsgGb),
+            })
+            .OrderBy(p => p.UDay)
+            .ToList();
+
+        var pages = new List<(string Title, List<TrafficReport> Data)>
+        {
+            ("All ISPs — Traffic Trend", combinedPoints),
+        };
+
+        foreach (var series in allSeries.OrderBy(s => s.Isp))
+        {
+            pages.Add(($"{series.Isp} — Traffic Trend", series.Points.ToList()));
+        }
+
+        var pdfBytes = RenderTrafficMultiPagePdf(pages);
+
+        Directory.CreateDirectory(CacheDir);
+        await File.WriteAllBytesAsync(cachedPath, pdfBytes);
+        _logger.LogInformation("Cached traffic PDF written to: {Path}", cachedPath);
+
+        return pdfBytes;
+    }
+
+    public async Task<byte[]> GenerateWeeklyMatrixPdfAsync(string? isp, string? weeksFilter)
+    {
+        var cacheKeyBase = string.IsNullOrWhiteSpace(isp)
+            ? "weekly_matrix_all_isps"
+            : $"weekly_matrix_{isp.Replace(" ", "_")}";
+        var cacheKey = string.IsNullOrWhiteSpace(weeksFilter)
+            ? cacheKeyBase
+            : $"{cacheKeyBase}_weeks_{weeksFilter.Replace(",", "-")}";
+        var cachedPath = Path.Combine(CacheDir, $"{cacheKey}.pdf");
+
+        if (File.Exists(cachedPath))
+        {
+            var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(cachedPath);
+            if (age.TotalDays < 1)
+            {
+                _logger.LogInformation("Returning cached weekly matrix PDF: {Path}", cachedPath);
+                return await File.ReadAllBytesAsync(cachedPath);
+            }
+        }
+
+        var stats = (await _salesRepository.GetWeeklySalesAsync(isp)).ToList();
+
+        if (!string.IsNullOrWhiteSpace(weeksFilter))
+        {
+            var allowedWeeks = weeksFilter
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (allowedWeeks.Count > 0)
+            {
+                stats = stats
+                    .Where(s =>
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(
+                            s.Period ?? string.Empty,
+                            "^(W\\d+)"
+                        );
+                        var weekCode = match.Success ? match.Groups[1].Value : string.Empty;
+                        return allowedWeeks.Contains(weekCode);
+                    })
+                    .ToList();
+            }
+        }
+        if (stats.Count == 0)
+        {
+            throw new InvalidOperationException("No weekly sales data available for the current period.");
+        }
+
+        var pdfBytes = RenderWeeklyMatrixPdf(stats);
+
+        Directory.CreateDirectory(CacheDir);
+        await File.WriteAllBytesAsync(cachedPath, pdfBytes);
+        _logger.LogInformation("Cached weekly matrix PDF written to: {Path}", cachedPath);
+
+        return pdfBytes;
+    }
+
+    public async Task<byte[]> GenerateProductPivotPdfAsync(string ispName)
+    {
+        if (string.IsNullOrWhiteSpace(ispName))
+            throw new ArgumentException("ISP name is required.", nameof(ispName));
+
+        var breakdown = (
+            await _productSalesRepository.GetProductWeeklyBreakdownAsync(ispName)
+        ).ToList();
+
+        if (breakdown.Count == 0)
+            throw new InvalidOperationException(
+                $"No product sales data available for ISP: {ispName}."
+            );
+
+        return RenderProductPivotPdf(ispName, breakdown);
+    }
+
+    private static byte[] RenderProductPivotPdf(
+        string ispName,
+        List<ProductWeeklyBreakdown> breakdown
+    )
+    {
+        const float pageWidth = 842;
+        const float pageHeight = 595;
+        const float margin = 36f;
+        const float headerHeight = 40f;
+        const float rowHeight = 18f;
+
+        var periodList = breakdown.Select(s => s.Period).Distinct().ToList();
+        var periods = periodList
+            .OrderBy(p =>
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(p ?? "", @"W(\d+)");
+                return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
+            })
+            .ToList();
+
+        var productGroups = breakdown
+            .GroupBy(s => s.ProductName)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        using var stream = new MemoryStream();
+        using var doc = SKDocument.CreatePdf(stream);
+
+        using var page = doc.BeginPage(pageWidth, pageHeight);
+        page.Clear(SKColors.White);
+
+        using var titlePaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 16,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
+        };
+
+        using var headerPaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 9,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
+        };
+
+        using var cellPaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 8,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+        };
+
+        using var gridPaint = new SKPaint
+        {
+            Color = new SKColor(220, 220, 220),
+            StrokeWidth = 0.5f,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+        };
+
+        var title = "Pivot Table Report";
+        var titleBounds = new SKRect();
+        titlePaint.MeasureText(title, ref titleBounds);
+        var titleY = margin + titleBounds.Height;
+        page.DrawText(title, margin, titleY, titlePaint);
+
+        using var subtitlePaint = new SKPaint
+        {
+            Color = SKColors.Gray,
+            TextSize = 10,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+        };
+        var subtitle = $"ISP: {ispName}";
+        var subtitleBounds = new SKRect();
+        subtitlePaint.MeasureText(subtitle, ref subtitleBounds);
+        var subtitleY = titleY + 6 + subtitleBounds.Height;
+        page.DrawText(subtitle, margin, subtitleY, subtitlePaint);
+
+        float tableTop = subtitleY + 16f;
+        float tableLeft = margin;
+        float tableRight = pageWidth - margin;
+
+        float productColWidth = 120f;
+        float remainingWidth = tableRight - tableLeft - productColWidth;
+        float colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
+
+        float headerY = tableTop;
+
+        page.DrawText("F_PROD_NAME", tableLeft + 4, headerY, headerPaint);
+
+        for (int i = 0; i < periods.Count; i++)
+        {
+            var period = periods[i];
+            var x = tableLeft + productColWidth + i * colWidth + 4;
+            var label = period.Length > 12 ? period.Substring(0, 12) + "…" : period;
+            page.DrawText(label, x, headerY, headerPaint);
+        }
+
+        float rowTop = tableTop + 10f;
+
+        foreach (var group in productGroups)
+        {
+            if (rowTop + rowHeight > pageHeight - margin)
+            {
+                doc.EndPage();
+                using var newPage = doc.BeginPage(pageWidth, pageHeight);
+                newPage.Clear(SKColors.White);
+                rowTop = margin;
+            }
+
+            var productName = group.Key;
+            var byPeriod = group.ToDictionary(s => s.Period, s => s.Purchases);
+
+            var productLabel = productName.Length > 18 ? productName.Substring(0, 18) + "…" : productName;
+            page.DrawText(productLabel, tableLeft + 4, rowTop + rowHeight - 4, cellPaint);
+
+            for (int i = 0; i < periods.Count; i++)
+            {
+                var x = tableLeft + productColWidth + i * colWidth;
+                var rect = new SKRect(x, rowTop, x + colWidth, rowTop + rowHeight);
+                page.DrawRect(rect, gridPaint);
+
+                if (byPeriod.TryGetValue(periods[i], out var purchases))
+                {
+                    var text = purchases.ToString("N0");
+                    page.DrawText(text, rect.Left + 4, rect.Bottom - 4, cellPaint);
+                }
+            }
+
+            rowTop += rowHeight;
+        }
+
+        doc.EndPage();
+        doc.Close();
+
+        return stream.ToArray();
+    }
+
     private static bool ShouldCachePostpaid(IspReportFilter filter)
     {
         // Only cache if:
@@ -259,6 +537,248 @@ public class IspReportPdfService : IIspReportPdfService
         }
 
         skDoc.Close();
+        return stream.ToArray();
+    }
+
+    private static byte[] RenderTrafficMultiPagePdf(
+        List<(string Title, List<TrafficReport> Data)> pages
+    )
+    {
+        const float pageWidth = 842;
+        const float pageHeight = 595;
+        const int chartPixelWidth = 1600;
+        const int chartPixelHeight = 900;
+
+        using var stream = new MemoryStream();
+        using var skDoc = SKDocument.CreatePdf(stream);
+
+        foreach (var (title, data) in pages)
+        {
+            var plotModel = BuildTrafficPlotModel(data, title);
+            using var chartBitmap = RenderChartToBitmap(
+                plotModel,
+                chartPixelWidth,
+                chartPixelHeight
+            );
+
+            using var pageCanvas = skDoc.BeginPage(pageWidth, pageHeight);
+
+            pageCanvas.Clear(SKColors.White);
+
+            const float margin = 30f;
+            var availableWidth = pageWidth - 2 * margin;
+            var availableHeight = pageHeight - 2 * margin;
+
+            var scale = Math.Min(
+                availableWidth / chartBitmap.Width,
+                availableHeight / chartBitmap.Height
+            );
+
+            var imgWidth = chartBitmap.Width * scale;
+            var imgHeight = chartBitmap.Height * scale;
+            var x = (pageWidth - imgWidth) / 2;
+            var y = (pageHeight - imgHeight) / 2;
+
+            pageCanvas.DrawBitmap(
+                chartBitmap,
+                SKRect.Create(x, y, imgWidth, imgHeight)
+            );
+
+            skDoc.EndPage();
+        }
+
+        skDoc.Close();
+        return stream.ToArray();
+    }
+
+    private static byte[] RenderWeeklyMatrixPdf(List<WeeklySalesStat> stats)
+    {
+        const float pageWidth = 842;
+        const float pageHeight = 595;
+        const float margin = 36f;
+        const float headerHeight = 40f;
+        const float rowHeight = 18f;
+
+        var periods = stats
+            .Select(s => s.Period)
+            .Distinct()
+            .OrderBy(p => p)
+            .ToList();
+
+        var ispGroups = stats
+            .GroupBy(s => s.Isp)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        using var stream = new MemoryStream();
+        using var doc = SKDocument.CreatePdf(stream);
+
+        using var page = doc.BeginPage(pageWidth, pageHeight);
+        page.Clear(SKColors.White);
+
+        using var titlePaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 16,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
+        };
+
+        using var headerPaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 9,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
+        };
+
+        using var cellPaint = new SKPaint
+        {
+            Color = SKColors.Black,
+            TextSize = 8,
+            IsAntialias = true,
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+        };
+
+        using var gridPaint = new SKPaint
+        {
+            Color = new SKColor(220, 220, 220),
+            StrokeWidth = 0.5f,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+        };
+
+        var title = "ISP × Week Matrix";
+        var titleBounds = new SKRect();
+        titlePaint.MeasureText(title, ref titleBounds);
+        var titleY = margin + titleBounds.Height;
+        page.DrawText(
+            title,
+            margin,
+            titleY,
+            titlePaint
+        );
+
+        // Build a human-readable summary of the week date ranges
+        var weekDateLabels = periods
+            .Select(p =>
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    p ?? string.Empty,
+                    "\\(([^)]+)\\)"
+                );
+                return match.Success ? match.Groups[1].Value : string.Empty;
+            })
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct()
+            .ToList();
+
+        float tableTop;
+
+        if (weekDateLabels.Count > 0)
+        {
+            using var subtitlePaint = new SKPaint
+            {
+                Color = SKColors.Gray,
+                TextSize = 10,
+                IsAntialias = true,
+                Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+            };
+
+            var subtitle = $"Weeks: {string.Join("; ", weekDateLabels)}";
+            var subtitleBounds = new SKRect();
+            subtitlePaint.MeasureText(subtitle, ref subtitleBounds);
+            var subtitleY = titleY + 6 + subtitleBounds.Height;
+
+            page.DrawText(
+                subtitle,
+                margin,
+                subtitleY,
+                subtitlePaint
+            );
+
+            tableTop = subtitleY + 16f;
+        }
+        else
+        {
+            tableTop = margin + headerHeight;
+        }
+        float tableLeft = margin;
+        float tableRight = pageWidth - margin;
+
+        float ispColWidth = 90f;
+        float totalColWidth = 60f;
+        float remainingWidth = tableRight - tableLeft - ispColWidth - totalColWidth;
+        float colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
+
+        float headerY = tableTop;
+
+        page.DrawText("ISP", tableLeft + 4, headerY, headerPaint);
+        page.DrawText("Total", tableLeft + ispColWidth + 4, headerY, headerPaint);
+
+        for (int i = 0; i < periods.Count; i++)
+        {
+            var period = periods[i];
+            var x = tableLeft + ispColWidth + totalColWidth + i * colWidth + 4;
+            var label = period.Split(' ')[0];
+            page.DrawText(label, x, headerY, headerPaint);
+        }
+
+        float rowTop = tableTop + 10f;
+
+        foreach (var group in ispGroups)
+        {
+            if (rowTop + rowHeight > pageHeight - margin)
+            {
+                doc.EndPage();
+                using var newPage = doc.BeginPage(pageWidth, pageHeight);
+                newPage.Clear(SKColors.White);
+                rowTop = margin;
+            }
+
+            var ispName = group.Key;
+            var totalPurchases = group.Sum(s => s.Purchases);
+
+            page.DrawText(ispName, tableLeft + 4, rowTop + rowHeight - 4, cellPaint);
+            page.DrawText(
+                totalPurchases.ToString("N0"),
+                tableLeft + ispColWidth + 4,
+                rowTop + rowHeight - 4,
+                cellPaint
+            );
+
+            var byPeriod = group.ToDictionary(s => s.Period, s => s);
+
+            for (int i = 0; i < periods.Count; i++)
+            {
+                var x = tableLeft + ispColWidth + totalColWidth + i * colWidth;
+                var rect = new SKRect(
+                    x,
+                    rowTop,
+                    x + colWidth,
+                    rowTop + rowHeight
+                );
+
+                page.DrawRect(rect, gridPaint);
+
+                if (byPeriod.TryGetValue(periods[i], out var cell))
+                {
+                    var text = cell.Purchases.ToString("N0");
+                    page.DrawText(
+                        text,
+                        rect.Left + 4,
+                        rect.Bottom - 4,
+                        cellPaint
+                    );
+                }
+            }
+
+            rowTop += rowHeight;
+        }
+
+        doc.EndPage();
+        doc.Close();
+
         return stream.ToArray();
     }
 
@@ -356,7 +876,6 @@ public class IspReportPdfService : IIspReportPdfService
             TickStyle = TickStyle.None,
             StringFormat = "#,0",
             FontSize = 10,
-            Minimum = 0,
         };
         model.Axes.Add(purchaseAxis);
 
@@ -371,7 +890,6 @@ public class IspReportPdfService : IIspReportPdfService
             TickStyle = TickStyle.None,
             StringFormat = "#,0",
             FontSize = 10,
-            Minimum = 0,
         };
         model.Axes.Add(amountAxis);
 
@@ -388,6 +906,107 @@ public class IspReportPdfService : IIspReportPdfService
                 AddAreaSeries(model, data, purchaseColor, amountColor);
                 break;
         }
+
+        return model;
+    }
+
+    private static PlotModel BuildTrafficPlotModel(
+        List<TrafficReport> data,
+        string title
+    )
+    {
+        var model = new PlotModel
+        {
+            Title = title,
+            TitleFontSize = 16,
+            TitleFontWeight = FontWeights.Bold,
+            PlotAreaBorderThickness = new OxyThickness(0),
+            Padding = new OxyThickness(10, 20, 30, 10),
+        };
+
+        model.PlotAreaBorderColor = OxyColors.Transparent;
+
+        var days = data.Select(d => FormatDay(d.UDay)).ToArray();
+        var subsColor = OxyColor.FromRgb(0x3C, 0x71, 0xDD);
+        var trafficColor = OxyColor.FromRgb(0x79, 0x53, 0xC6);
+
+        var categoryAxis = new CategoryAxis
+        {
+            Position = AxisPosition.Bottom,
+            ItemsSource = days,
+            GapWidth = 0.2,
+            MajorGridlineStyle = LineStyle.None,
+            MinorGridlineStyle = LineStyle.None,
+            TickStyle = TickStyle.None,
+            Angle = -45,
+            FontSize = 10,
+        };
+        model.Axes.Add(categoryAxis);
+
+        var hasData = data.Count > 0;
+        var minSubs = hasData ? data.Min(d => (double)d.Subs) : 0d;
+        var minTraffic = hasData ? data.Min(d => (double)d.UsgGb) : 0d;
+        var globalMin = Math.Min(minSubs, minTraffic);
+
+        var subsAxis = new LinearAxis
+        {
+            Position = AxisPosition.Left,
+            Key = "subs",
+            Title = "Subscriptions",
+            TitleFontSize = 11,
+            MajorGridlineStyle = LineStyle.Dot,
+            MajorGridlineColor = OxyColor.FromRgb(229, 231, 235),
+            MinorGridlineStyle = LineStyle.None,
+            TickStyle = TickStyle.None,
+            StringFormat = "#,0",
+            FontSize = 10,
+            Minimum = hasData ? globalMin : double.NaN,
+        };
+        model.Axes.Add(subsAxis);
+
+        var trafficAxis = new LinearAxis
+        {
+            Position = AxisPosition.Right,
+            Key = "traffic",
+            Title = "Traffic (GB)",
+            TitleFontSize = 11,
+            MajorGridlineStyle = LineStyle.None,
+            MinorGridlineStyle = LineStyle.None,
+            TickStyle = TickStyle.None,
+            StringFormat = "#,0",
+            FontSize = 10,
+            Minimum = hasData ? globalMin : double.NaN,
+        };
+        model.Axes.Add(trafficAxis);
+
+        var subsSeries = new AreaSeries
+        {
+            Title = "Subscriptions",
+            YAxisKey = "subs",
+            Color = subsColor,
+            Fill = OxyColor.FromAColor(50, subsColor),
+            StrokeThickness = 2,
+            MarkerType = MarkerType.None,
+        };
+
+        var trafficSeries = new AreaSeries
+        {
+            Title = "Traffic (GB)",
+            YAxisKey = "traffic",
+            Color = trafficColor,
+            Fill = OxyColor.FromAColor(50, trafficColor),
+            StrokeThickness = 2,
+            MarkerType = MarkerType.None,
+        };
+
+        for (int i = 0; i < data.Count; i++)
+        {
+            subsSeries.Points.Add(new DataPoint(i, data[i].Subs));
+            trafficSeries.Points.Add(new DataPoint(i, (double)data[i].UsgGb));
+        }
+
+        model.Series.Add(subsSeries);
+        model.Series.Add(trafficSeries);
 
         return model;
     }
@@ -694,7 +1313,6 @@ public class IspReportPdfService : IIspReportPdfService
             TickStyle = TickStyle.None,
             StringFormat = "#,0",
             FontSize = 10,
-            Minimum = 0,
         };
         model.Axes.Add(eWalletAxis);
 
@@ -796,5 +1414,13 @@ public class IspReportPdfService : IIspReportPdfService
         if (monthIdx < 0 || monthIdx > 11)
             return yyyymm;
         return $"{MonthNames[monthIdx]} {yyyymm[..4]}";
+    }
+
+    private static string FormatDay(string yyyymmdd)
+    {
+        if (yyyymmdd.Length != 8)
+            return yyyymmdd;
+
+        return $"{yyyymmdd.Substring(0, 4)}-{yyyymmdd.Substring(4, 2)}-{yyyymmdd.Substring(6, 2)}";
     }
 }

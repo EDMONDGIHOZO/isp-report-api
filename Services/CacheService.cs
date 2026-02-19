@@ -180,7 +180,7 @@ public class CacheService : ICacheService
 
     public string GenerateFilterHash(IspReportFilter filter)
     {
-        var filterString = $"{filter.FromPeriod ?? "null"}|{filter.ToPeriod ?? "null"}|{filter.IspName ?? "null"}|{filter.IncludeCurrentMonthWeekly}";
+        var filterString = $"{filter.FromPeriod ?? "null"}|{filter.ToPeriod ?? "null"}|{filter.IspName ?? "null"}|{filter.FromDate?.ToString("yyyy-MM-dd") ?? "null"}|{filter.ToDate?.ToString("yyyy-MM-dd") ?? "null"}";
         using var sha256 = SHA256.Create();
         var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(filterString));
         return Convert.ToHexString(hashBytes).ToLowerInvariant();

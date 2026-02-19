@@ -28,6 +28,39 @@ public class AdAuthService
     }
 
     /// <summary>
+    /// Checks if a user exists in the local Users table and is active.
+    /// Returns the normalized email if allowed, or (null, errorMessage) if not.
+    /// </summary>
+    public async Task<(string? Email, string? ErrorMessage)> EnsureLocalUserAllowedAsync(
+        string usernameOrEmail
+    )
+    {
+        var email = usernameOrEmail.Trim();
+        if (email.Contains('@'))
+        {
+            email = email.ToLowerInvariant();
+        }
+        else
+        {
+            var domain = _configuration["ActiveDirectory:Domain"] ?? "ktrn.rw";
+            email = $"{email}@{domain}".ToLowerInvariant();
+        }
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
+        if (user == null)
+        {
+            return (null, "User is not allowed to access this application.");
+        }
+
+        if (!user.IsActive)
+        {
+            return (null, "User account is inactive.");
+        }
+
+        return (email, null);
+    }
+
+    /// <summary>
     /// Authenticates a user against Active Directory using LDAP.
     /// Accepts either a username (sAMAccountName) or work email address.
     /// </summary>
@@ -333,6 +366,111 @@ public class AdAuthService
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Searches Active Directory for users matching the given query string.
+    /// Uses the configured service account for binding. Searches across
+    /// displayName, sAMAccountName, and mail attributes.
+    /// </summary>
+    public Task<List<AdUserDetails>> SearchUsersAsync(string query)
+    {
+        var results = new List<AdUserDetails>();
+
+        if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
+            return Task.FromResult(results);
+
+        var server = _configuration["ActiveDirectory:Server"];
+        var portStr = _configuration["ActiveDirectory:Port"] ?? "389";
+        var port = int.Parse(portStr);
+        var baseDn = _configuration["ActiveDirectory:BaseDn"];
+        var domain = _configuration["ActiveDirectory:Domain"];
+        var useSSL = bool.Parse(_configuration["ActiveDirectory:UseSSL"] ?? "false");
+        var serviceAccount = _configuration["ActiveDirectory:ServiceAccount"];
+        var servicePassword = _configuration["ActiveDirectory:ServicePassword"];
+
+        if (string.IsNullOrEmpty(server) || string.IsNullOrEmpty(serviceAccount) ||
+            string.IsNullOrEmpty(servicePassword) || string.IsNullOrEmpty(baseDn))
+        {
+            _logger.LogWarning("AD search skipped: service account or server not configured");
+            return Task.FromResult(results);
+        }
+
+        try
+        {
+            var ldapServer = server.Replace("ldap://", "").Replace("ldaps://", "");
+            var ldapIdentifier = new LdapDirectoryIdentifier(ldapServer, port);
+
+            var serviceUserDn = !string.IsNullOrEmpty(domain)
+                ? $"{domain}\\{serviceAccount}"
+                : serviceAccount;
+            var credential = new NetworkCredential(serviceUserDn, servicePassword);
+
+            using var connection = new LdapConnection(ldapIdentifier)
+            {
+                AuthType = AuthType.Basic,
+                Credential = credential,
+            };
+
+            connection.SessionOptions.ProtocolVersion = 3;
+            connection.SessionOptions.SecureSocketLayer = useSSL;
+
+            if (!useSSL)
+            {
+                connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
+            }
+
+            connection.Bind();
+
+            var escapedQuery = EscapeLdapSearchFilter(query.Trim());
+
+            // Search for person objects matching the query in name, username, or email
+            var searchFilter =
+                $"(&(objectCategory=person)(objectClass=user)(|(displayName=*{escapedQuery}*)(sAMAccountName=*{escapedQuery}*)(mail=*{escapedQuery}*)))";
+
+            var searchRequest = new SearchRequest(
+                baseDn,
+                searchFilter,
+                SearchScope.Subtree,
+                "displayName",
+                "mail",
+                "department",
+                "sAMAccountName",
+                "userPrincipalName"
+            );
+
+            // Limit results to keep autocomplete snappy
+            searchRequest.SizeLimit = 20;
+
+            var response = (SearchResponse)connection.SendRequest(searchRequest);
+
+            foreach (SearchResultEntry entry in response.Entries)
+            {
+                var email = GetAttributeValue(entry, "mail");
+                var displayName = GetAttributeValue(entry, "displayName");
+
+                // Skip entries without an email
+                if (string.IsNullOrEmpty(email))
+                    continue;
+
+                results.Add(new AdUserDetails
+                {
+                    DisplayName = displayName,
+                    Email = email,
+                    Department = GetAttributeValue(entry, "department"),
+                    SamAccountName = GetAttributeValue(entry, "sAMAccountName"),
+                    UserPrincipalName = GetAttributeValue(entry, "userPrincipalName"),
+                });
+            }
+
+            _logger.LogInformation("AD search for '{Query}' returned {Count} results", query, results.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error searching AD for users matching '{Query}'", query);
+        }
+
+        return Task.FromResult(results);
     }
 
     public async Task<User> GetOrCreateUserAsync(AdAuthResult adResult)

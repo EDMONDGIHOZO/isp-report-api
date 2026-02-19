@@ -16,6 +16,8 @@ public interface IIspReportRepository
     Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllPostpaidIspNamesAsync();
     Task<PostpaidStats> GetPostpaidStatsAsync(IspReportFilter filter);
+    Task<IEnumerable<TrafficReport>> GetTrafficDailyAsync(IspReportFilter filter);
+    Task<IEnumerable<TrafficReportSeries>> GetTrafficDailyAllIspsAsync(IspReportFilter filter);
 }
 
 public class IspReportRepository : IIspReportRepository
@@ -29,22 +31,29 @@ public class IspReportRepository : IIspReportRepository
 
     public async Task<IEnumerable<IspMonthlyReport>> GetMonthlyReportsAsync(IspReportFilter filter)
     {
-        // If weekly view for current month is requested, return weekly data
-        if (filter.IncludeCurrentMonthWeekly)
+        // Day-level date range filtering — aggregates by day, always excludes today
+        if (filter.HasDateRange)
         {
-            var currentMonth = DateTime.Now.ToString("yyyyMM");
+            // Clamp ToDate to yesterday to always exclude today's incomplete data
+            var today = DateTime.Now.Date;
+            var effectiveTo = filter.ToDate!.Value.Date >= today
+                ? today.AddDays(-1)
+                : filter.ToDate!.Value.Date;
+
             var sql = new StringBuilder(
                 @"
                 SELECT 
-                    'Week ' || TO_NUMBER(TO_CHAR(TRUNC(STATE_DATE, 'IW'), 'WW')) || ' (' || TO_CHAR(TRUNC(STATE_DATE, 'IW'), 'DD Mon') || ' - ' || TO_CHAR(TRUNC(STATE_DATE, 'IW') + 6, 'DD Mon') || ')' AS UDay,
+                    TO_CHAR(STATE_DATE, 'YYYY-MM-DD') AS UDay,
                     COUNT(ACC_NBR) AS Purchase,
                     SUM(SUBS_AMOUNT) / 100 AS Amount
                 FROM RB_REPORT.REPORT_ALL_IPP
-                WHERE TO_CHAR(STATE_DATE, 'YYYYMM') = :CurrentMonth"
+                WHERE TRUNC(STATE_DATE) >= :FromDate
+                  AND TRUNC(STATE_DATE) <= :ToDate"
             );
 
             var parameters = new DynamicParameters();
-            parameters.Add("CurrentMonth", currentMonth);
+            parameters.Add("FromDate", filter.FromDate!.Value.Date);
+            parameters.Add("ToDate", effectiveTo);
 
             if (!string.IsNullOrEmpty(filter.IspName))
             {
@@ -54,13 +63,13 @@ public class IspReportRepository : IIspReportRepository
 
             sql.Append(
                 @"
-                GROUP BY TRUNC(STATE_DATE, 'IW')
-                ORDER BY TRUNC(STATE_DATE, 'IW') ASC"
+                GROUP BY TO_CHAR(STATE_DATE, 'YYYY-MM-DD')
+                ORDER BY TO_CHAR(STATE_DATE, 'YYYY-MM-DD') ASC"
             );
 
-            using var weeklyConnection = _connectionFactory.CreateConnection();
-            weeklyConnection.Open();
-            return await weeklyConnection.QueryAsync<IspMonthlyReport>(sql.ToString(), parameters);
+            using var dateRangeConnection = _connectionFactory.CreateConnection();
+            dateRangeConnection.Open();
+            return await dateRangeConnection.QueryAsync<IspMonthlyReport>(sql.ToString(), parameters);
         }
 
         // Normal monthly view (excludes current month)
@@ -268,12 +277,17 @@ public class IspReportRepository : IIspReportRepository
         var whereClause = new StringBuilder("WHERE 1=1");
         var parameters = new DynamicParameters();
 
-        // If weekly view for current month is requested, limit to current month only
-        if (filter.IncludeCurrentMonthWeekly)
+        // Day-level date range filtering — always exclude today
+        if (filter.HasDateRange)
         {
-            var currentMonth = DateTime.Now.ToString("yyyyMM");
-            whereClause.Append(" AND TO_CHAR(STATE_DATE, 'YYYYMM') = :CurrentMonth");
-            parameters.Add("CurrentMonth", currentMonth);
+            var today = DateTime.Now.Date;
+            var effectiveTo = filter.ToDate!.Value.Date >= today
+                ? today.AddDays(-1)
+                : filter.ToDate!.Value.Date;
+
+            whereClause.Append(" AND TRUNC(STATE_DATE) >= :FromDate AND TRUNC(STATE_DATE) <= :ToDate");
+            parameters.Add("FromDate", filter.FromDate!.Value.Date);
+            parameters.Add("ToDate", effectiveTo);
         }
         else
         {
@@ -725,6 +739,75 @@ public class IspReportRepository : IIspReportRepository
             HighestMonth = monthStats.FirstOrDefault(),
             LowestMonth = monthStats.LastOrDefault(),
         };
+    }
+
+    public async Task<IEnumerable<TrafficReport>> GetTrafficDailyAsync(IspReportFilter filter)
+    {
+        var sql = new StringBuilder(
+            @"
+            SELECT 
+                TO_CHAR(TRUNC(STATE_DAY), 'YYYYMMDD') AS UDay,
+                SP_NAME AS Isp,
+                COUNT(DISTINCT ACC_NBR) AS Subs,
+                ROUND(SUM(USG_AMOUNT_KB) / 1024 / 1024, 0) AS UsgGb
+            FROM RB_REPORT.REPORT_DAILY_USAGE
+            WHERE PROD_CODE != 'ISP Default PP'"
+        );
+
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            sql.Append(" AND TO_CHAR(STATE_DAY, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            sql.Append(" AND STATE_DAY >= TRUNC(SYSDATE - 31)");
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            sql.Append(" AND TO_CHAR(STATE_DAY, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+        else
+        {
+            sql.Append(" AND STATE_DAY < TRUNC(SYSDATE)");
+        }
+
+        if (!string.IsNullOrEmpty(filter.IspName))
+        {
+            sql.Append(" AND SP_NAME = :IspName");
+            parameters.Add("IspName", filter.IspName);
+        }
+
+        sql.Append(
+            @"
+            GROUP BY TRUNC(STATE_DAY), SP_NAME
+            ORDER BY TRUNC(STATE_DAY) ASC, SP_NAME ASC"
+        );
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        return await connection.QueryAsync<TrafficReport>(sql.ToString(), parameters);
+    }
+
+    public async Task<IEnumerable<TrafficReportSeries>> GetTrafficDailyAllIspsAsync(
+        IspReportFilter filter
+    )
+    {
+        var rows = await GetTrafficDailyAsync(filter);
+
+        return rows
+            .GroupBy(r => r.Isp)
+            .Select(g => new TrafficReportSeries
+            {
+                Isp = g.Key,
+                Points = g
+                    .OrderBy(p => p.UDay)
+                    .ToList(),
+            });
     }
 }
 

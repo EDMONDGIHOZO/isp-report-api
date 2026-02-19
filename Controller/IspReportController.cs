@@ -28,7 +28,8 @@ public class IspReportController : ControllerBase
         [FromQuery] string? from,
         [FromQuery] string? to,
         [FromQuery] string? isp,
-        [FromQuery] bool includeCurrentMonthWeekly = false
+        [FromQuery] string? fromDate,
+        [FromQuery] string? toDate
     )
     {
         try
@@ -38,8 +39,13 @@ public class IspReportController : ControllerBase
                 FromPeriod = from,
                 ToPeriod = to,
                 IspName = isp,
-                IncludeCurrentMonthWeekly = includeCurrentMonthWeekly,
             };
+
+            // Parse day-level date range if provided
+            if (!string.IsNullOrEmpty(fromDate) && DateTime.TryParse(fromDate, out var fd))
+                filter.FromDate = fd;
+            if (!string.IsNullOrEmpty(toDate) && DateTime.TryParse(toDate, out var td))
+                filter.ToDate = td;
 
             var reports = await _ispReportService.GetMonthlyReportsAsync(filter);
             return Ok(reports);
@@ -169,13 +175,12 @@ public class IspReportController : ControllerBase
         }
     }
 
-    [HttpGet("prepaid-stats")]
+    [HttpGet("traffic/daily")]
     [Authorize]
-    public async Task<IActionResult> GetPrepaidStats(
+    public async Task<IActionResult> GetTrafficDaily(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        [FromQuery] string? isp,
-        [FromQuery] bool includeCurrentMonthWeekly = false
+        [FromQuery] string? isp
     )
     {
         try
@@ -185,8 +190,172 @@ public class IspReportController : ControllerBase
                 FromPeriod = from,
                 ToPeriod = to,
                 IspName = isp,
-                IncludeCurrentMonthWeekly = includeCurrentMonthWeekly,
             };
+
+            var reports = await _ispReportService.GetTrafficDailyAsync(filter);
+            return Ok(reports);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch daily traffic reports", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("traffic/daily-all")]
+    [Authorize]
+    public async Task<IActionResult> GetTrafficDailyAllIsps(
+        [FromQuery] string? from,
+        [FromQuery] string? to
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = null,
+            };
+
+            var series = await _ispReportService.GetTrafficDailyAllIspsAsync(filter);
+            return Ok(series);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch daily traffic reports for all ISPs", Details = ex.Message }
+            );
+        }
+    }
+
+    [HttpGet("traffic/daily-all-pdf")]
+    [Authorize]
+    public async Task<IActionResult> GetTrafficDailyAllIspsPdf(
+        [FromQuery] string? from,
+        [FromQuery] string? to
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = null,
+            };
+
+            var pdfBytes = await _pdfService.GenerateTrafficAllIspsPdfAsync(filter);
+
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+            var fileName = $"traffic-all-isps-{timestamp}.pdf";
+
+            return File(pdfBytes, "application/pdf", fileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to generate traffic PDF report", Details = ex.Message }
+            );
+        }
+    }
+
+        [HttpGet("product-sales/weekly")]
+        [Authorize]
+        public async Task<IActionResult> GetProductWeeklySales()
+        {
+            try
+            {
+                var reports = await _ispReportService.GetProductWeeklySalesAsync();
+                return Ok(reports);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new { Error = "Failed to fetch product weekly sales", Details = ex.Message }
+                );
+            }
+        }
+
+        [HttpGet("product-sales/weekly-by-product")]
+        [Authorize]
+        public async Task<IActionResult> GetProductWeeklyBreakdown([FromQuery] string? isp)
+        {
+            if (string.IsNullOrWhiteSpace(isp))
+            {
+                return BadRequest(new { Error = "Query parameter 'isp' is required." });
+            }
+
+            try
+            {
+                var breakdown = await _ispReportService.GetProductWeeklyBreakdownAsync(isp);
+                return Ok(breakdown);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new { Error = "Failed to fetch product weekly breakdown", Details = ex.Message }
+                );
+            }
+        }
+
+        /// <summary>
+        /// GET /api/IspReport/products
+        /// Returns distinct products from CC.PROD_MAPPING.
+        /// </summary>
+        [HttpGet("products")]
+        [Authorize]
+        public async Task<IActionResult> GetProducts()
+        {
+            try
+            {
+                var products = await _ispReportService.GetProductsAsync();
+                return Ok(products);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new { Error = "Failed to fetch products", Details = ex.Message }
+                );
+            }
+        }
+
+    [HttpGet("prepaid-stats")]
+    [Authorize]
+    public async Task<IActionResult> GetPrepaidStats(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string? isp,
+        [FromQuery] string? fromDate,
+        [FromQuery] string? toDate
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = isp,
+            };
+
+            // Parse day-level date range if provided
+            if (!string.IsNullOrEmpty(fromDate) && DateTime.TryParse(fromDate, out var fd))
+                filter.FromDate = fd;
+            if (!string.IsNullOrEmpty(toDate) && DateTime.TryParse(toDate, out var td))
+                filter.ToDate = td;
+
             var stats = await _ispReportService.GetPrepaidStatsAsync(filter);
             return Ok(stats);
         }

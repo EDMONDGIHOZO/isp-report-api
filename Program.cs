@@ -35,9 +35,12 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddSingleton<IOracleConnectionFactory, OracleConnectionFactory>();
 builder.Services.AddScoped<IOracleRepository, OracleRepository>();
 builder.Services.AddScoped<IIspReportRepository, IspReportRepository>();
+builder.Services.AddScoped<IProductSalesRepository, ProductSalesRepository>();
+builder.Services.AddScoped<ISalesRepository, SalesRepository>();
 builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<IIspReportService, IspReportService>();
 builder.Services.AddScoped<IIspReportPdfService, IspReportPdfService>();
+builder.Services.AddScoped<IProductSalesReportService, ProductSalesReportService>();
 
 // JWT Authentication
 var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "KtrnIspReportApiDefaultSecretKey2026!@#";
@@ -255,7 +258,11 @@ app.MapPost(
 
 app.MapPost(
         "/auth/ad-login",
-        async ([FromBody] AdLoginRequest request, AdAuthService adAuthService) =>
+        async (
+            [FromBody] AdLoginRequest request,
+            AdAuthService adAuthService,
+            AppDbContext db
+        ) =>
         {
             if (
                 string.IsNullOrWhiteSpace(request.Username)
@@ -267,6 +274,15 @@ app.MapPost(
 
             try
             {
+                // First check if user is in local users table and is active
+                var (allowedEmail, allowError) = await adAuthService.EnsureLocalUserAllowedAsync(
+                    request.Username
+                );
+                if (allowError != null)
+                {
+                    return Results.BadRequest(new { Error = allowError });
+                }
+
                 // Authenticate against Active Directory
                 var adResult = await adAuthService.AuthenticateAsync(
                     request.Username,
@@ -281,7 +297,17 @@ app.MapPost(
                 // Get or create local user for the AD user
                 var user = await adAuthService.GetOrCreateUserAsync(adResult);
 
-                // Generate JWT token
+                var userWithRole = await db.Users
+                    .AsNoTracking()
+                    .Include(u => u.Role)
+                    .ThenInclude(r => r!.RolePages)
+                    .FirstOrDefaultAsync(u => u.Id == user.Id);
+
+                var roleName = userWithRole?.Role?.Name;
+                var permissions =
+                    userWithRole?.Role?.RolePages?.Select(rp => rp.PageKey).ToList()
+                    ?? new List<string>();
+
                 var token = adAuthService.GenerateJwtToken(user);
 
                 return Results.Ok(
@@ -293,6 +319,9 @@ app.MapPost(
                             user.Id,
                             user.Email,
                             user.Name,
+                            RoleId = user.RoleId,
+                            RoleName = roleName,
+                            Permissions = permissions,
                         },
                         AuthMethod = "ActiveDirectory",
                     }
@@ -319,11 +348,18 @@ app.MapGet(
                 return Results.Unauthorized();
             }
 
-            var user = await db.Users.FindAsync(userId);
+            var user = await db.Users
+                .AsNoTracking()
+                .Include(u => u.Role)
+                .ThenInclude(r => r!.RolePages)
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
             if (user == null)
             {
                 return Results.NotFound();
             }
+
+            var permissions = user.Role?.RolePages?.Select(rp => rp.PageKey).ToList() ?? new List<string>();
 
             return Results.Ok(
                 new
@@ -331,12 +367,277 @@ app.MapGet(
                     user.Id,
                     user.Email,
                     user.Name,
+                    RoleId = user.RoleId,
+                    RoleName = user.Role?.Name,
+                    Permissions = permissions,
                 }
             );
         }
     )
     .RequireAuthorization()
     .WithName("GetCurrentUser");
+
+var allowedPageKeys = new[]
+{
+    "dashboard",
+    "dashboard/prepaid-sales",
+    "dashboard/postpaid-sales",
+    "dashboard/traffic",
+    "dashboard/product-sales",
+    "dashboard/purchases",
+    "dashboard/settings",
+};
+
+app.MapGet("/api/pages", () => Results.Ok(allowedPageKeys)).RequireAuthorization();
+
+app.MapGet(
+        "/api/roles",
+        async (AppDbContext db) =>
+        {
+            var roles = await db.Roles
+                .AsNoTracking()
+                .Include(r => r.RolePages)
+                .OrderBy(r => r.Name)
+                .Select(
+                    r =>
+                        new
+                        {
+                            r.Id,
+                            r.Name,
+                            PageKeys = r.RolePages.Select(rp => rp.PageKey).ToList(),
+                        }
+                )
+                .ToListAsync();
+            return Results.Ok(roles);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPost(
+        "/api/roles",
+        async ([FromBody] CreateRoleRequest request, AppDbContext db) =>
+        {
+            var invalidPages = request.PageKeys?.Except(allowedPageKeys).ToList() ?? new List<string>();
+            if (invalidPages.Count > 0)
+            {
+                return Results.BadRequest(
+                    new { Error = $"Invalid page keys: {string.Join(", ", invalidPages)}" }
+                );
+            }
+
+            var role = new Role { Name = request.Name.Trim() };
+            db.Roles.Add(role);
+            await db.SaveChangesAsync();
+
+            foreach (var key in request.PageKeys ?? new List<string>())
+            {
+                db.RolePages.Add(new RolePage { RoleId = role.Id, PageKey = key });
+            }
+
+            await db.SaveChangesAsync();
+
+            return Results.Created(
+                $"/api/roles/{role.Id}",
+                new { role.Id, role.Name, PageKeys = request.PageKeys }
+            );
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPut(
+        "/api/roles/{id:int}",
+        async (int id, [FromBody] UpdateRoleRequest request, AppDbContext db) =>
+        {
+            var role = await db.Roles.FindAsync(id);
+            if (role == null)
+                return Results.NotFound();
+
+            role.Name = request.Name.Trim();
+            var existingPages = await db.RolePages.Where(rp => rp.RoleId == id).ToListAsync();
+            db.RolePages.RemoveRange(existingPages);
+
+            var pageKeys = request.PageKeys ?? new List<string>();
+            var invalidPages = pageKeys.Except(allowedPageKeys).ToList();
+            if (invalidPages.Count > 0)
+            {
+                return Results.BadRequest(
+                    new { Error = $"Invalid page keys: {string.Join(", ", invalidPages)}" }
+                );
+            }
+
+            foreach (var key in pageKeys)
+            {
+                db.RolePages.Add(new RolePage { RoleId = id, PageKey = key });
+            }
+
+            await db.SaveChangesAsync();
+            return Results.Ok(new { role.Id, role.Name, PageKeys = pageKeys });
+        }
+    )
+    .RequireAuthorization();
+
+app.MapDelete("/api/roles/{id:int}", async (int id, AppDbContext db) =>
+{
+    var role = await db.Roles.FindAsync(id);
+    if (role == null)
+        return Results.NotFound();
+    var usersWithRole = await db.Users.AnyAsync(u => u.RoleId == id);
+    if (usersWithRole)
+        return Results.BadRequest(new { Error = "Cannot delete role that is assigned to users." });
+    db.Roles.Remove(role);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapGet(
+        "/api/users/ad-search",
+        async ([FromQuery] string? q, AdAuthService adAuthService) =>
+        {
+            if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2)
+            {
+                return Results.Ok(Array.Empty<object>());
+            }
+
+            var adUsers = await adAuthService.SearchUsersAsync(q);
+            var result = adUsers.Select(u => new
+            {
+                displayName = u.DisplayName,
+                email = u.Email,
+                department = u.Department,
+            });
+            return Results.Ok(result);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/users",
+        async (AppDbContext db) =>
+        {
+            var users = await db.Users
+                .AsNoTracking()
+                .Include(u => u.Role)
+                .OrderBy(u => u.Email)
+                .Select(
+                    u =>
+                        new
+                        {
+                            u.Id,
+                            u.Email,
+                            u.Name,
+                            u.IsActive,
+                            RoleId = u.RoleId,
+                            RoleName = u.Role != null ? u.Role.Name : null,
+                        }
+                )
+                .ToListAsync();
+            return Results.Ok(users);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPost(
+        "/api/users",
+        async ([FromBody] CreateUserRequest request, AppDbContext db) =>
+        {
+            var email = request.Email.Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(email))
+                return Results.BadRequest(new { Error = "Email is required." });
+
+            var exists = await db.Users.AnyAsync(u => u.Email == email);
+            if (exists)
+                return Results.BadRequest(new { Error = "A user with this email already exists." });
+
+            if (request.RoleId.HasValue)
+            {
+                var roleExists = await db.Roles.AnyAsync(r => r.Id == request.RoleId.Value);
+                if (!roleExists)
+                    return Results.BadRequest(new { Error = "Invalid role." });
+            }
+
+            var user = new User
+            {
+                Email = email,
+                Name = request.Name?.Trim(),
+                RoleId = request.RoleId,
+                IsActive = true,
+            };
+            db.Users.Add(user);
+            await db.SaveChangesAsync();
+            return Results.Created(
+                $"/api/users/{user.Id}",
+                new
+                {
+                    user.Id,
+                    user.Email,
+                    user.Name,
+                    user.IsActive,
+                    user.RoleId,
+                }
+            );
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPut(
+        "/api/users/{id:int}",
+        async (int id, [FromBody] UpdateUserRequest request, AppDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user == null)
+                return Results.NotFound();
+
+            var email = request.Email?.Trim().ToLowerInvariant();
+            if (!string.IsNullOrEmpty(email) && email != user.Email)
+            {
+                var exists = await db.Users.AnyAsync(u => u.Email == email && u.Id != id);
+                if (exists)
+                    return Results.BadRequest(new { Error = "A user with this email already exists." });
+                user.Email = email;
+            }
+
+            if (request.Name != null)
+                user.Name = request.Name.Trim();
+            if (request.RoleId != null)
+            {
+                if (request.RoleId.Value == 0)
+                    user.RoleId = null;
+                else
+                {
+                    var roleExists = await db.Roles.AnyAsync(r => r.Id == request.RoleId.Value);
+                    if (!roleExists)
+                        return Results.BadRequest(new { Error = "Invalid role." });
+                    user.RoleId = request.RoleId;
+                }
+            }
+
+            if (request.IsActive.HasValue)
+                user.IsActive = request.IsActive.Value;
+
+            await db.SaveChangesAsync();
+            return Results.Ok(
+                new
+                {
+                    user.Id,
+                    user.Email,
+                    user.Name,
+                    user.IsActive,
+                    user.RoleId,
+                }
+            );
+        }
+    )
+    .RequireAuthorization();
+
+app.MapDelete("/api/users/{id:int}", async (int id, AppDbContext db) =>
+{
+    var user = await db.Users.FindAsync(id);
+    if (user == null)
+        return Results.NotFound();
+    db.Users.Remove(user);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+}).RequireAuthorization();
 
 // Apply migrations automatically
 using (var scope = app.Services.CreateScope())
@@ -387,3 +688,11 @@ public record LoginRequest(string Email, string Password);
 public record RegisterRequest(string Email, string Password, string? Name);
 
 public record VerifyEmailRequest(string Email, string Code);
+
+public record CreateRoleRequest(string Name, List<string>? PageKeys);
+
+public record UpdateRoleRequest(string Name, List<string>? PageKeys);
+
+public record CreateUserRequest(string Email, string? Name, int? RoleId);
+
+public record UpdateUserRequest(string? Email, string? Name, int? RoleId, bool? IsActive);
