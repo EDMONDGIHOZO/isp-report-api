@@ -8,6 +8,7 @@ public class ProductSalesRawRow
     public string Period { get; set; } = string.Empty;
     public string? Category { get; set; }
     public int Purchases { get; set; }
+    public decimal RetailRwf { get; set; }
 }
 
 /// <summary>KPI block for the product sales dashboard.</summary>
@@ -20,6 +21,20 @@ public class ProductSalesKpis
     public string BestWeek { get; set; } = string.Empty;
     public string WorstWeek { get; set; } = string.Empty;
     public double? WeekOverWeekGrowthPercent { get; set; }
+
+        // Executive KPI card fields
+        public decimal Revenue { get; set; }
+    public decimal PreviousPeriodRevenue { get; set; }
+    public double? RevenueGrowthPercent { get; set; }
+    public long UnitsSold { get; set; }
+    public long PreviousPeriodUnitsSold { get; set; }
+    public double? UnitsGrowthPercent { get; set; }
+    public int ActiveRetailers { get; set; }
+    public int PreviousPeriodActiveRetailers { get; set; }
+    public double? RetailerGrowthPercent { get; set; }
+    public double? OverallGrowthPercent { get; set; }
+    public string CurrentPeriodLabel { get; set; } = string.Empty;
+    public string PreviousPeriodLabel { get; set; } = string.Empty;
 }
 
 /// <summary>One point for the weekly trend (e.g. line chart).</summary>

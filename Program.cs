@@ -72,10 +72,28 @@ builder.Services.AddCors(options =>
         "AllowAll",
         policy =>
         {
-            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+            policy
+                .WithOrigins(
+                    "http://systems.ktrn.rw:4005",
+                    "http://localhost:5173",
+                    "http://192.168.10.172:4005"
+                )
+                .AllowAnyHeader()
+                .AllowAnyMethod();
         }
     );
 });
+
+// CLI utilities (run before starting the web host)
+var cliArgs = Environment.GetCommandLineArgs();
+if (
+    cliArgs.Length > 1
+    && string.Equals(cliArgs[1], "create-admin", StringComparison.OrdinalIgnoreCase)
+)
+{
+    CreateAdminUserAsync(builder.Services, builder.Configuration, cliArgs).GetAwaiter().GetResult();
+    return;
+}
 
 var app = builder.Build();
 
@@ -178,7 +196,12 @@ app.MapPost(
 
 app.MapPost(
     "/auth/login",
-    async ([FromBody] LoginRequest request, AuthService authService) =>
+    async (
+        [FromBody] LoginRequest request,
+        AuthService authService,
+        AppDbContext db,
+        HttpContext httpContext
+    ) =>
     {
         try
         {
@@ -203,6 +226,22 @@ app.MapPost(
             }
 
             var token = authService.GenerateJwtToken(user!);
+
+            var ip =
+                httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault()
+                ?? "unknown";
+
+            db.AccessLogs.Add(
+                new AccessLog
+                {
+                    Email = user!.Email,
+                    TimestampUtc = DateTime.UtcNow,
+                    IpAddress = ip,
+                }
+            );
+            await db.SaveChangesAsync();
+
             return Results.Ok(
                 new
                 {
@@ -261,7 +300,8 @@ app.MapPost(
         async (
             [FromBody] AdLoginRequest request,
             AdAuthService adAuthService,
-            AppDbContext db
+            AppDbContext db,
+            HttpContext httpContext
         ) =>
         {
             if (
@@ -297,10 +337,10 @@ app.MapPost(
                 // Get or create local user for the AD user
                 var user = await adAuthService.GetOrCreateUserAsync(adResult);
 
-                var userWithRole = await db.Users
-                    .AsNoTracking()
+                var userWithRole = await db
+                    .Users.AsNoTracking()
                     .Include(u => u.Role)
-                    .ThenInclude(r => r!.RolePages)
+                        .ThenInclude(r => r!.RolePages)
                     .FirstOrDefaultAsync(u => u.Id == user.Id);
 
                 var roleName = userWithRole?.Role?.Name;
@@ -309,6 +349,21 @@ app.MapPost(
                     ?? new List<string>();
 
                 var token = adAuthService.GenerateJwtToken(user);
+
+                var ip =
+                    httpContext.Connection.RemoteIpAddress?.ToString()
+                    ?? httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault()
+                    ?? "unknown";
+
+                db.AccessLogs.Add(
+                    new AccessLog
+                    {
+                        Email = user.Email,
+                        TimestampUtc = DateTime.UtcNow,
+                        IpAddress = ip,
+                    }
+                );
+                await db.SaveChangesAsync();
 
                 return Results.Ok(
                     new
@@ -348,10 +403,10 @@ app.MapGet(
                 return Results.Unauthorized();
             }
 
-            var user = await db.Users
-                .AsNoTracking()
+            var user = await db
+                .Users.AsNoTracking()
                 .Include(u => u.Role)
-                .ThenInclude(r => r!.RolePages)
+                    .ThenInclude(r => r!.RolePages)
                 .FirstOrDefaultAsync(u => u.Id == userId);
 
             if (user == null)
@@ -359,7 +414,8 @@ app.MapGet(
                 return Results.NotFound();
             }
 
-            var permissions = user.Role?.RolePages?.Select(rp => rp.PageKey).ToList() ?? new List<string>();
+            var permissions =
+                user.Role?.RolePages?.Select(rp => rp.PageKey).ToList() ?? new List<string>();
 
             return Results.Ok(
                 new
@@ -394,19 +450,16 @@ app.MapGet(
         "/api/roles",
         async (AppDbContext db) =>
         {
-            var roles = await db.Roles
-                .AsNoTracking()
+            var roles = await db
+                .Roles.AsNoTracking()
                 .Include(r => r.RolePages)
                 .OrderBy(r => r.Name)
-                .Select(
-                    r =>
-                        new
-                        {
-                            r.Id,
-                            r.Name,
-                            PageKeys = r.RolePages.Select(rp => rp.PageKey).ToList(),
-                        }
-                )
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Name,
+                    PageKeys = r.RolePages.Select(rp => rp.PageKey).ToList(),
+                })
                 .ToListAsync();
             return Results.Ok(roles);
         }
@@ -417,7 +470,8 @@ app.MapPost(
         "/api/roles",
         async ([FromBody] CreateRoleRequest request, AppDbContext db) =>
         {
-            var invalidPages = request.PageKeys?.Except(allowedPageKeys).ToList() ?? new List<string>();
+            var invalidPages =
+                request.PageKeys?.Except(allowedPageKeys).ToList() ?? new List<string>();
             if (invalidPages.Count > 0)
             {
                 return Results.BadRequest(
@@ -438,7 +492,12 @@ app.MapPost(
 
             return Results.Created(
                 $"/api/roles/{role.Id}",
-                new { role.Id, role.Name, PageKeys = request.PageKeys }
+                new
+                {
+                    role.Id,
+                    role.Name,
+                    PageKeys = request.PageKeys,
+                }
             );
         }
     )
@@ -471,23 +530,36 @@ app.MapPut(
             }
 
             await db.SaveChangesAsync();
-            return Results.Ok(new { role.Id, role.Name, PageKeys = pageKeys });
+            return Results.Ok(
+                new
+                {
+                    role.Id,
+                    role.Name,
+                    PageKeys = pageKeys,
+                }
+            );
         }
     )
     .RequireAuthorization();
 
-app.MapDelete("/api/roles/{id:int}", async (int id, AppDbContext db) =>
-{
-    var role = await db.Roles.FindAsync(id);
-    if (role == null)
-        return Results.NotFound();
-    var usersWithRole = await db.Users.AnyAsync(u => u.RoleId == id);
-    if (usersWithRole)
-        return Results.BadRequest(new { Error = "Cannot delete role that is assigned to users." });
-    db.Roles.Remove(role);
-    await db.SaveChangesAsync();
-    return Results.NoContent();
-}).RequireAuthorization();
+app.MapDelete(
+        "/api/roles/{id:int}",
+        async (int id, AppDbContext db) =>
+        {
+            var role = await db.Roles.FindAsync(id);
+            if (role == null)
+                return Results.NotFound();
+            var usersWithRole = await db.Users.AnyAsync(u => u.RoleId == id);
+            if (usersWithRole)
+                return Results.BadRequest(
+                    new { Error = "Cannot delete role that is assigned to users." }
+                );
+            db.Roles.Remove(role);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }
+    )
+    .RequireAuthorization();
 
 app.MapGet(
         "/api/users/ad-search",
@@ -514,22 +586,19 @@ app.MapGet(
         "/api/users",
         async (AppDbContext db) =>
         {
-            var users = await db.Users
-                .AsNoTracking()
+            var users = await db
+                .Users.AsNoTracking()
                 .Include(u => u.Role)
                 .OrderBy(u => u.Email)
-                .Select(
-                    u =>
-                        new
-                        {
-                            u.Id,
-                            u.Email,
-                            u.Name,
-                            u.IsActive,
-                            RoleId = u.RoleId,
-                            RoleName = u.Role != null ? u.Role.Name : null,
-                        }
-                )
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Email,
+                    u.Name,
+                    u.IsActive,
+                    RoleId = u.RoleId,
+                    RoleName = u.Role != null ? u.Role.Name : null,
+                })
                 .ToListAsync();
             return Results.Ok(users);
         }
@@ -592,7 +661,9 @@ app.MapPut(
             {
                 var exists = await db.Users.AnyAsync(u => u.Email == email && u.Id != id);
                 if (exists)
-                    return Results.BadRequest(new { Error = "A user with this email already exists." });
+                    return Results.BadRequest(
+                        new { Error = "A user with this email already exists." }
+                    );
                 user.Email = email;
             }
 
@@ -629,15 +700,19 @@ app.MapPut(
     )
     .RequireAuthorization();
 
-app.MapDelete("/api/users/{id:int}", async (int id, AppDbContext db) =>
-{
-    var user = await db.Users.FindAsync(id);
-    if (user == null)
-        return Results.NotFound();
-    db.Users.Remove(user);
-    await db.SaveChangesAsync();
-    return Results.NoContent();
-}).RequireAuthorization();
+app.MapDelete(
+        "/api/users/{id:int}",
+        async (int id, AppDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user == null)
+                return Results.NotFound();
+            db.Users.Remove(user);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }
+    )
+    .RequireAuthorization();
 
 // Apply migrations automatically
 using (var scope = app.Services.CreateScope())
@@ -680,6 +755,125 @@ _ = Task.Run(async () =>
 });
 
 app.Run();
+
+static async Task CreateAdminUserAsync(
+    IServiceCollection services,
+    IConfiguration configuration,
+    string[] args
+)
+{
+    Console.WriteLine("=== ISP Report API - Create Admin User ===");
+
+    string? email = null;
+    string? password = null;
+    string? name = null;
+
+    // Simple arg parsing: create-admin --email foo --password bar --name "Admin User"
+    for (var i = 2; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--email" when i + 1 < args.Length:
+                email = args[++i];
+                break;
+            case "--password" when i + 1 < args.Length:
+                password = args[++i];
+                break;
+            case "--name" when i + 1 < args.Length:
+                name = args[++i];
+                break;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(email))
+    {
+        Console.Write("Admin email: ");
+        email = Console.ReadLine();
+    }
+
+    if (string.IsNullOrWhiteSpace(password))
+    {
+        Console.Write("Admin password: ");
+        password = Console.ReadLine();
+    }
+
+    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+    {
+        Console.WriteLine("Email and password are required. Aborting.");
+        return;
+    }
+
+    email = email.Trim().ToLowerInvariant();
+
+    var serviceProvider = services.BuildServiceProvider();
+    using var scope = serviceProvider.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var authService = scope.ServiceProvider.GetRequiredService<AuthService>();
+
+    // Ensure Admin role exists
+    var adminRole = await db.Roles.FirstOrDefaultAsync(r => r.Name == "Admin");
+    if (adminRole == null)
+    {
+        adminRole = new Role { Name = "Admin" };
+        db.Roles.Add(adminRole);
+        await db.SaveChangesAsync();
+
+        // Give admin role access to all known pages
+        var pageKeys = new[]
+        {
+            "dashboard",
+            "dashboard/prepaid-sales",
+            "dashboard/postpaid-sales",
+            "dashboard/traffic",
+            "dashboard/product-sales",
+            "dashboard/purchases",
+            "dashboard/settings",
+        };
+
+        foreach (var key in pageKeys)
+        {
+            db.RolePages.Add(new RolePage { RoleId = adminRole.Id, PageKey = key });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    var existingUser = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
+    var passwordHash = authService.HashPassword(password);
+
+    if (existingUser == null)
+    {
+        var user = new User
+        {
+            Email = email,
+            Name = string.IsNullOrWhiteSpace(name) ? email : name,
+            PasswordHash = passwordHash,
+            EmailVerified = true,
+            IsActive = true,
+            RoleId = adminRole.Id,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        Console.WriteLine($"Admin user created with Id={user.Id}, Email={user.Email}");
+    }
+    else
+    {
+        existingUser.PasswordHash = passwordHash;
+        existingUser.IsActive = true;
+        existingUser.EmailVerified = true;
+        existingUser.RoleId = adminRole.Id;
+        await db.SaveChangesAsync();
+
+        Console.WriteLine(
+            $"Existing user updated to admin. Id={existingUser.Id}, Email={existingUser.Email}"
+        );
+    }
+
+    Console.WriteLine("Done.");
+}
 
 public record AdLoginRequest(string Username, string Password);
 

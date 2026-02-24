@@ -14,6 +14,7 @@ public class AppDbContext : DbContext
     public DbSet<RolePage> RolePages { get; set; }
     public DbSet<OtpCode> OtpCodes { get; set; }
     public DbSet<CacheEntry> CacheEntries { get; set; }
+    public DbSet<AccessLog> AccessLogs { get; set; }
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -37,5 +38,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<RolePage>()
             .HasIndex(rp => new { rp.RoleId, rp.PageKey })
             .IsUnique();
+
+        modelBuilder.Entity<AccessLog>()
+            .HasIndex(a => a.Email);
     }
 }

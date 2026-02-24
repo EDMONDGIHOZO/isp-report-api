@@ -64,6 +64,62 @@ public class ProductSalesReportService : IProductSalesReportService
             WeekOverWeekGrowthPercent = wowGrowth,
         };
 
+        // Executive KPI cards: split periods into two halves for comparison
+        if (periods.Count >= 2)
+        {
+            var midpoint = periods.Count / 2;
+            var previousPeriods = new HashSet<string>(periods.Take(midpoint));
+            var currentPeriods = new HashSet<string>(periods.Skip(midpoint));
+
+            var currentRows = raw.Where(r => currentPeriods.Contains(r.Period)).ToList();
+            var previousRows = raw.Where(r => previousPeriods.Contains(r.Period)).ToList();
+
+            var currentRevenue = currentRows.Sum(r => r.RetailRwf);
+            var previousRevenue = previousRows.Sum(r => r.RetailRwf);
+            var currentUnits = (long)currentRows.Sum(r => r.Purchases);
+            var previousUnits = (long)previousRows.Sum(r => r.Purchases);
+            var currentRetailers = currentRows.Select(r => r.Isp).Distinct().Count();
+            var previousRetailers = previousRows.Select(r => r.Isp).Distinct().Count();
+
+            kpis.Revenue = currentRevenue;
+            kpis.PreviousPeriodRevenue = previousRevenue;
+            kpis.RevenueGrowthPercent = previousRevenue > 0
+                ? Math.Round((double)((currentRevenue - previousRevenue) / previousRevenue) * 100, 2)
+                : null;
+
+            kpis.UnitsSold = currentUnits;
+            kpis.PreviousPeriodUnitsSold = previousUnits;
+            kpis.UnitsGrowthPercent = previousUnits > 0
+                ? Math.Round((double)(currentUnits - previousUnits) / previousUnits * 100, 2)
+                : null;
+
+            kpis.ActiveRetailers = currentRetailers;
+            kpis.PreviousPeriodActiveRetailers = previousRetailers;
+            kpis.RetailerGrowthPercent = previousRetailers > 0
+                ? Math.Round((double)(currentRetailers - previousRetailers) / previousRetailers * 100, 2)
+                : null;
+
+            kpis.OverallGrowthPercent = kpis.RevenueGrowthPercent;
+
+            // Build period labels from the period strings (e.g. "W1 (01/01/26 to 07/01/26)")
+            var currentPeriodList = periods.Skip(midpoint).ToList();
+            var previousPeriodList = periods.Take(midpoint).ToList();
+            kpis.CurrentPeriodLabel = currentPeriodList.Count > 0
+                ? $"{currentPeriodList.First()} – {currentPeriodList.Last()}"
+                : "";
+            kpis.PreviousPeriodLabel = previousPeriodList.Count > 0
+                ? $"{previousPeriodList.First()} – {previousPeriodList.Last()}"
+                : "";
+        }
+        else
+        {
+            // Single period — no comparison possible
+            kpis.Revenue = raw.Sum(r => r.RetailRwf);
+            kpis.UnitsSold = totalPurchases;
+            kpis.ActiveRetailers = raw.Select(r => r.Isp).Distinct().Count();
+            kpis.CurrentPeriodLabel = periods.FirstOrDefault() ?? "";
+        }
+
         var groupMode = (groupBy ?? "ISP").ToUpperInvariant();
         var weeklyTrend = BuildWeeklyTrend(raw, periods, groupMode);
 

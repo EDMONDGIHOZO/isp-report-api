@@ -340,6 +340,7 @@ public class IspReportRepository : IIspReportRepository
             FROM RB_REPORT.REPORT_ALL_IPP
             {whereClause}
             AND SP_NAME IS NOT NULL
+            AND LOWER(SP_NAME) NOT LIKE 'ktrn%'
             GROUP BY SP_NAME
             ORDER BY Amount DESC";
 
@@ -352,6 +353,7 @@ public class IspReportRepository : IIspReportRepository
             FROM RB_REPORT.REPORT_ALL_IPP
             {whereClause}
             AND SP_NAME IS NOT NULL
+            AND LOWER(SP_NAME) NOT LIKE 'ktrn%'
             GROUP BY SP_NAME
             ORDER BY Purchases DESC";
 
@@ -676,6 +678,7 @@ public class IspReportRepository : IIspReportRepository
                 0 AS Purchases
             {whereClause}
             AND b.sp_name IS NOT NULL
+            AND LOWER(b.sp_name) NOT LIKE 'ktrn%'
             GROUP BY b.sp_name
             ORDER BY Amount DESC";
 

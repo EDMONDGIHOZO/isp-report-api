@@ -178,6 +178,7 @@ public class ProductSalesRepository : IProductSalesRepository
                     TRUNC(RA.STATE_DATE - 4, 'IW') + 4 AS week_start,
                     TRUNC(RA.STATE_DATE - 4, 'IW') + 4 + 6 AS week_end,
                     RA.ORDER_NBR,
+                    RA.SUBS_AMOUNT,
                     CASE
                         WHEN UPPER(PM.F_PROD_NAME) LIKE '%MONTHLY%' THEN 'Monthly'
                         WHEN UPPER(PM.F_PROD_NAME) LIKE '%BUNDLE%' THEN 'Bundle'
@@ -196,7 +197,8 @@ public class ProductSalesRepository : IProductSalesRepository
                     week_start,
                     week_end,
                     MAX(CATEGORY) AS CATEGORY,
-                    COUNT(ORDER_NBR) AS Purchases
+                    COUNT(ORDER_NBR) AS Purchases,
+                    SUM(SUBS_AMOUNT) / 100 AS RetailRwf
                 FROM WeekData
                 GROUP BY SP_NAME, F_PROD_NAME, week_start, week_end
             ),
@@ -208,6 +210,7 @@ public class ProductSalesRepository : IProductSalesRepository
                     week_end,
                     CATEGORY,
                     Purchases,
+                    RetailRwf,
                     DENSE_RANK() OVER (ORDER BY week_start) AS WeekIndex
                 FROM Aggregated
             )
@@ -217,7 +220,8 @@ public class ProductSalesRepository : IProductSalesRepository
                 'W' || TO_CHAR(WeekIndex)
                     || ' (' || TO_CHAR(week_start, 'DD/MM/YY') || ' to ' || TO_CHAR(week_end, 'DD/MM/YY') || ')' AS Period,
                 CATEGORY AS Category,
-                Purchases
+                Purchases,
+                RetailRwf
             FROM AggregatedWithIndex
             ORDER BY SP_NAME, F_PROD_NAME, week_start";
 

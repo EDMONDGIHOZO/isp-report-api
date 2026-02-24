@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "33cgnjgYg6c=",
+  "dgSpecHash": "HjVxr+ZIyf0=",
   "success": true,
   "projectFilePath": "/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/isp-report-api.csproj",
   "expectedPackageFiles": [
@@ -8,6 +8,7 @@
     "/Users/eddy/.nuget/packages/dapper/2.1.66/dapper.2.1.66.nupkg.sha512",
     "/Users/eddy/.nuget/packages/google.protobuf/3.32.0/google.protobuf.3.32.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/harfbuzzsharp.nativeassets.linux/7.3.0.2/harfbuzzsharp.nativeassets.linux.7.3.0.2.nupkg.sha512",
     "/Users/eddy/.nuget/packages/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg.sha512",
     "/Users/eddy/.nuget/packages/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg.sha512",
     "/Users/eddy/.nuget/packages/humanizer.core/2.14.1/humanizer.core.2.14.1.nupkg.sha512",
@@ -50,6 +51,7 @@
     "/Users/eddy/.nuget/packages/oxyplot.skiasharp/2.2.0/oxyplot.skiasharp.2.2.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/skiasharp/2.88.8/skiasharp.2.88.8.nupkg.sha512",
     "/Users/eddy/.nuget/packages/skiasharp.harfbuzz/2.88.8/skiasharp.harfbuzz.2.88.8.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/skiasharp.nativeassets.linux.nodependencies/2.88.7/skiasharp.nativeassets.linux.nodependencies.2.88.7.nupkg.sha512",
     "/Users/eddy/.nuget/packages/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg.sha512",
     "/Users/eddy/.nuget/packages/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg.sha512",
     "/Users/eddy/.nuget/packages/swashbuckle.aspnetcore/10.1.2/swashbuckle.aspnetcore.10.1.2.nupkg.sha512",
@@ -71,7 +73,8 @@
     "/Users/eddy/.nuget/packages/system.security.cryptography.protecteddata/8.0.0/system.security.cryptography.protecteddata.8.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.security.permissions/8.0.0/system.security.permissions.8.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.windows.extensions/8.0.0/system.windows.extensions.8.0.0.nupkg.sha512",
-    "/Users/eddy/.nuget/packages/zstdsharp.port/0.8.6/zstdsharp.port.0.8.6.nupkg.sha512"
+    "/Users/eddy/.nuget/packages/zstdsharp.port/0.8.6/zstdsharp.port.0.8.6.nupkg.sha512",
+    "/Users/eddy/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.1/microsoft.netcore.app.host.linux-x64.10.0.1.nupkg.sha512"
   ],
   "logs": [
     {
