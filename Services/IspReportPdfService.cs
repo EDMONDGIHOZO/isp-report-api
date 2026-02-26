@@ -27,6 +27,7 @@ public class IspReportPdfService : IIspReportPdfService
     private readonly IProductSalesRepository _productSalesRepository;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<IspReportPdfService> _logger;
+    private readonly string _logoPath;
 
     private static readonly string CacheDir = Path.Combine(
         Path.GetTempPath(),
@@ -46,6 +47,7 @@ public class IspReportPdfService : IIspReportPdfService
         _productSalesRepository = productSalesRepository;
         _env = env;
         _logger = logger;
+        _logoPath = Path.Combine(env.ContentRootPath, "Assets", "ktrn-logo.png");
     }
 
     public async Task<byte[]> GenerateAllIspsPdfAsync(
@@ -315,15 +317,11 @@ public class IspReportPdfService : IIspReportPdfService
         return RenderProductPivotPdf(ispName, breakdown);
     }
 
-    private static byte[] RenderProductPivotPdf(
+    private byte[] RenderProductPivotPdf(
         string ispName,
         List<ProductWeeklyBreakdown> breakdown
     )
     {
-        const float pageWidth = 842;
-        const float pageHeight = 595;
-        const float margin = 36f;
-        const float headerHeight = 40f;
         const float rowHeight = 18f;
 
         var periodList = breakdown.Select(s => s.Period).Distinct().ToList();
@@ -343,13 +341,10 @@ public class IspReportPdfService : IIspReportPdfService
         using var stream = new MemoryStream();
         using var doc = SKDocument.CreatePdf(stream);
 
-        using var page = doc.BeginPage(pageWidth, pageHeight);
-        page.Clear(SKColors.White);
-
         using var titlePaint = new SKPaint
         {
             Color = SKColors.Black,
-            TextSize = 16,
+            TextSize = 14,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
         };
@@ -357,7 +352,7 @@ public class IspReportPdfService : IIspReportPdfService
         using var headerPaint = new SKPaint
         {
             Color = SKColors.Black,
-            TextSize = 9,
+            TextSize = 8,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
         };
@@ -365,7 +360,7 @@ public class IspReportPdfService : IIspReportPdfService
         using var cellPaint = new SKPaint
         {
             Color = SKColors.Black,
-            TextSize = 8,
+            TextSize = 7,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
         };
@@ -378,73 +373,184 @@ public class IspReportPdfService : IIspReportPdfService
             Style = SKPaintStyle.Stroke,
         };
 
-        var title = "Pivot Table Report";
-        var titleBounds = new SKRect();
-        titlePaint.MeasureText(title, ref titleBounds);
-        var titleY = margin + titleBounds.Height;
-        page.DrawText(title, margin, titleY, titlePaint);
+        int pageNumber = 0;
+        SKCanvas? currentCanvas = null;
 
+        SKRect StartNewPage()
+        {
+            if (currentCanvas != null)
+                doc.EndPage();
+
+            pageNumber++;
+            bool isCover = pageNumber == 1;
+
+            currentCanvas = doc.BeginPage(PdfBrandingHelper.PageWidth, PdfBrandingHelper.PageHeight);
+            return PdfBrandingHelper.DrawPageLayout(
+                currentCanvas,
+                "Product Pivot Table Report",
+                pageNumber,
+                isCover,
+                _logoPath
+            );
+        }
+
+        var area = StartNewPage();
+        float tableLeft = area.Left;
+        float tableRight = area.Right;
+        float rowTop = area.Top;
+
+        // Subtitle inside content area
         using var subtitlePaint = new SKPaint
         {
-            Color = SKColors.Gray,
-            TextSize = 10,
+            Color = SKColors.Black,
+            TextSize = 14,
             IsAntialias = true,
-            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
         };
         var subtitle = $"ISP: {ispName}";
         var subtitleBounds = new SKRect();
         subtitlePaint.MeasureText(subtitle, ref subtitleBounds);
-        var subtitleY = titleY + 6 + subtitleBounds.Height;
-        page.DrawText(subtitle, margin, subtitleY, subtitlePaint);
+        currentCanvas!.DrawText(subtitle, tableLeft, rowTop + subtitleBounds.Height, subtitlePaint);
+        rowTop += subtitleBounds.Height + 16f;
 
-        float tableTop = subtitleY + 16f;
-        float tableLeft = margin;
-        float tableRight = pageWidth - margin;
-
-        float productColWidth = 120f;
+        // Table layout
+        float productColWidth = 100f;
         float remainingWidth = tableRight - tableLeft - productColWidth;
         float colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
 
-        float headerY = tableTop;
-
-        page.DrawText("F_PROD_NAME", tableLeft + 4, headerY, headerPaint);
-
-        for (int i = 0; i < periods.Count; i++)
+        // Measure the tallest rotated header to reserve vertical space
+        float maxHeaderTextWidth = 0f;
+        foreach (var period in periods)
         {
-            var period = periods[i];
-            var x = tableLeft + productColWidth + i * colWidth + 4;
-            var label = period.Length > 12 ? period.Substring(0, 12) + "…" : period;
-            page.DrawText(label, x, headerY, headerPaint);
+            var match = System.Text.RegularExpressions.Regex.Match(period ?? "", @"(W\d+)\s*\((.*?)\)");
+            if (match.Success)
+            {
+                var parts = match.Groups[2].Value.Split('-');
+                if (parts.Length == 1) parts = match.Groups[2].Value.Split(' ');
+                
+                foreach (var d in parts)
+                {
+                    var w = headerPaint.MeasureText(d.Trim());
+                    if (w > maxHeaderTextWidth) maxHeaderTextWidth = w;
+                }
+            }
+        }
+        if (maxHeaderTextWidth < 20f) maxHeaderTextWidth = 20f;
+        float rotatedHeaderHeight = maxHeaderTextWidth + 10f; // Padding
+        float weekRowHeight = 24f; // Space for "W1", "W2", etc.
+        float totalHeaderHeight = rotatedHeaderHeight + weekRowHeight;
+
+        // Draw column headers (period labels rotated 90° CCW, week num unrotated)
+        void DrawTableHeaders(float y)
+        {
+            // Draw main header box for PRODUCT
+            currentCanvas!.DrawRect(new SKRect(tableLeft, y, tableLeft + productColWidth, y + totalHeaderHeight), gridPaint);
+            
+            // Text for PRODUCT, centered vertically
+            var prodText = "PRODUCT";
+            var pBounds = new SKRect();
+            headerPaint.MeasureText(prodText, ref pBounds);
+            currentCanvas.DrawText(prodText, tableLeft + 4, y + (totalHeaderHeight + pBounds.Height) / 2f - 2f, headerPaint);
+            
+            for (int i = 0; i < periods.Count; i++)
+            {
+                var period = periods[i];
+                string weekNum = period;
+                string date1 = "";
+                string date2 = "";
+                
+                var match = System.Text.RegularExpressions.Regex.Match(period ?? "", @"(W\d+)\s*\((.*?)\)");
+                if (match.Success)
+                {
+                    weekNum = match.Groups[1].Value;
+                    var parsedDates = match.Groups[2].Value
+                                           .Split(new[] { " to ", "-", " " }, StringSplitOptions.RemoveEmptyEntries);
+                    
+                    if (parsedDates.Length > 0) date1 = parsedDates[0].Trim();
+                    if (parsedDates.Length > 1) date2 = parsedDates[parsedDates.Length - 1].Trim(); // skips "to"
+                }
+                else
+                {
+                    var pLabel = (period?.Length ?? 0) > 12 ? period!.Substring(0, 12) + "…" : (period ?? "");
+                    date1 = pLabel;
+                }
+                
+                float colLeft = tableLeft + productColWidth + i * colWidth;
+                float colRight = colLeft + colWidth;
+                
+                // Draw outer box for the column header
+                currentCanvas.DrawRect(new SKRect(colLeft, y, colRight, y + totalHeaderHeight), gridPaint);
+                
+                // Draw horizontal line separating dates from week number
+                currentCanvas.DrawLine(colLeft, y + rotatedHeaderHeight, colRight, y + rotatedHeaderHeight, gridPaint);
+                
+                // Draw vertical line separating date1 and date2
+                float midX = colLeft + colWidth / 2f;
+                currentCanvas.DrawLine(midX, y, midX, y + rotatedHeaderHeight, gridPaint);
+                
+                // Draw Rotated Date 1 (top to bottom)
+                if (!string.IsNullOrEmpty(date1))
+                {
+                    currentCanvas.Save();
+                    currentCanvas.Translate(colLeft + colWidth / 4f, y + 4f);
+                    currentCanvas.RotateDegrees(90);
+                    currentCanvas.DrawText(date1, 0, -(headerPaint.TextSize / 3f), headerPaint);
+                    currentCanvas.Restore();
+                }
+                
+                // Draw Rotated Date 2 (top to bottom)
+                if (!string.IsNullOrEmpty(date2))
+                {
+                    currentCanvas.Save();
+                    currentCanvas.Translate(colLeft + 3f * colWidth / 4f, y + 4f);
+                    currentCanvas.RotateDegrees(90);
+                    currentCanvas.DrawText(date2, 0, -(headerPaint.TextSize / 3f), headerPaint);
+                    currentCanvas.Restore();
+                }
+                
+                // Draw Week Num centered
+                var wBounds = new SKRect();
+                headerPaint.MeasureText(weekNum, ref wBounds);
+                float wX = colLeft + (colWidth - wBounds.Width) / 2f;
+                float wY = y + rotatedHeaderHeight + (weekRowHeight + wBounds.Height) / 2f - 2f;
+                currentCanvas.DrawText(weekNum, wX, wY, headerPaint);
+            }
         }
 
-        float rowTop = tableTop + 10f;
+        DrawTableHeaders(rowTop);
+        rowTop += totalHeaderHeight;
 
         foreach (var group in productGroups)
         {
-            if (rowTop + rowHeight > pageHeight - margin)
+            if (rowTop + rowHeight > area.Bottom)
             {
-                doc.EndPage();
-                using var newPage = doc.BeginPage(pageWidth, pageHeight);
-                newPage.Clear(SKColors.White);
-                rowTop = margin;
+                area = StartNewPage();
+                tableLeft = area.Left;
+                tableRight = area.Right;
+                remainingWidth = tableRight - tableLeft - productColWidth;
+                colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
+                rowTop = area.Top;
+                DrawTableHeaders(rowTop);
+                rowTop += totalHeaderHeight;
             }
 
             var productName = group.Key;
             var byPeriod = group.ToDictionary(s => s.Period, s => s.Purchases);
 
             var productLabel = productName.Length > 18 ? productName.Substring(0, 18) + "…" : productName;
-            page.DrawText(productLabel, tableLeft + 4, rowTop + rowHeight - 4, cellPaint);
+            currentCanvas!.DrawRect(new SKRect(tableLeft, rowTop, tableLeft + productColWidth, rowTop + rowHeight), gridPaint);
+            currentCanvas.DrawText(productLabel, tableLeft + 4, rowTop + rowHeight - 6f, cellPaint);
 
             for (int i = 0; i < periods.Count; i++)
             {
                 var x = tableLeft + productColWidth + i * colWidth;
                 var rect = new SKRect(x, rowTop, x + colWidth, rowTop + rowHeight);
-                page.DrawRect(rect, gridPaint);
+                currentCanvas.DrawRect(rect, gridPaint);
 
                 if (byPeriod.TryGetValue(periods[i], out var purchases))
                 {
                     var text = purchases.ToString("N0");
-                    page.DrawText(text, rect.Left + 4, rect.Bottom - 4, cellPaint);
+                    currentCanvas.DrawText(text, rect.Left + 4, rect.Bottom - 4, cellPaint);
                 }
             }
 
@@ -486,21 +592,23 @@ public class IspReportPdfService : IIspReportPdfService
     /* PDF rendering using SkiaSharp SKDocument                            */
     /* ------------------------------------------------------------------ */
 
-    private static byte[] RenderMultiPagePdf(
+    private byte[] RenderMultiPagePdf(
         List<(string Title, List<IspMonthlyReport> Data)> pages,
         string chartType
     )
     {
-        const float pageWidth = 842; // A4 landscape width in points
-        const float pageHeight = 595; // A4 landscape height in points
         const int chartPixelWidth = 1600;
         const int chartPixelHeight = 900;
 
         using var stream = new MemoryStream();
         using var skDoc = SKDocument.CreatePdf(stream);
 
+        int pageNumber = 0;
         foreach (var (title, data) in pages)
         {
+            pageNumber++;
+            bool isCover = pageNumber == 1;
+
             var plotModel = BuildPlotModel(data, chartType, title);
             using var chartBitmap = RenderChartToBitmap(
                 plotModel,
@@ -508,25 +616,26 @@ public class IspReportPdfService : IIspReportPdfService
                 chartPixelHeight
             );
 
-            using var pageCanvas = skDoc.BeginPage(pageWidth, pageHeight);
+            using var pageCanvas = skDoc.BeginPage(PdfBrandingHelper.PageWidth, PdfBrandingHelper.PageHeight);
 
-            // White background
-            pageCanvas.Clear(SKColors.White);
+            var contentArea = PdfBrandingHelper.DrawPageLayout(
+                pageCanvas,
+                "Prepaid Sales Report",
+                pageNumber,
+                isCover,
+                _logoPath
+            );
 
-            // Fit chart image into page with margin
-            const float margin = 30f;
-            var availableWidth = pageWidth - 2 * margin;
-            var availableHeight = pageHeight - 2 * margin;
-
+            // Fit chart image into content area
             var scale = Math.Min(
-                availableWidth / chartBitmap.Width,
-                availableHeight / chartBitmap.Height
+                contentArea.Width / chartBitmap.Width,
+                contentArea.Height / chartBitmap.Height
             );
 
             var imgWidth = chartBitmap.Width * scale;
             var imgHeight = chartBitmap.Height * scale;
-            var x = (pageWidth - imgWidth) / 2;
-            var y = (pageHeight - imgHeight) / 2;
+            var x = contentArea.Left + (contentArea.Width - imgWidth) / 2;
+            var y = contentArea.Top + (contentArea.Height - imgHeight) / 2;
 
             pageCanvas.DrawBitmap(
                 chartBitmap,
@@ -540,20 +649,22 @@ public class IspReportPdfService : IIspReportPdfService
         return stream.ToArray();
     }
 
-    private static byte[] RenderTrafficMultiPagePdf(
+    private byte[] RenderTrafficMultiPagePdf(
         List<(string Title, List<TrafficReport> Data)> pages
     )
     {
-        const float pageWidth = 842;
-        const float pageHeight = 595;
         const int chartPixelWidth = 1600;
         const int chartPixelHeight = 900;
 
         using var stream = new MemoryStream();
         using var skDoc = SKDocument.CreatePdf(stream);
 
+        int pageNumber = 0;
         foreach (var (title, data) in pages)
         {
+            pageNumber++;
+            bool isCover = pageNumber == 1;
+
             var plotModel = BuildTrafficPlotModel(data, title);
             using var chartBitmap = RenderChartToBitmap(
                 plotModel,
@@ -561,23 +672,26 @@ public class IspReportPdfService : IIspReportPdfService
                 chartPixelHeight
             );
 
-            using var pageCanvas = skDoc.BeginPage(pageWidth, pageHeight);
+            using var pageCanvas = skDoc.BeginPage(PdfBrandingHelper.PageWidth, PdfBrandingHelper.PageHeight);
 
-            pageCanvas.Clear(SKColors.White);
+            var contentArea = PdfBrandingHelper.DrawPageLayout(
+                pageCanvas,
+                "Traffic Report",
+                pageNumber,
+                isCover,
+                _logoPath
+            );
 
-            const float margin = 30f;
-            var availableWidth = pageWidth - 2 * margin;
-            var availableHeight = pageHeight - 2 * margin;
-
+            // Fit chart image into content area
             var scale = Math.Min(
-                availableWidth / chartBitmap.Width,
-                availableHeight / chartBitmap.Height
+                contentArea.Width / chartBitmap.Width,
+                contentArea.Height / chartBitmap.Height
             );
 
             var imgWidth = chartBitmap.Width * scale;
             var imgHeight = chartBitmap.Height * scale;
-            var x = (pageWidth - imgWidth) / 2;
-            var y = (pageHeight - imgHeight) / 2;
+            var x = contentArea.Left + (contentArea.Width - imgWidth) / 2;
+            var y = contentArea.Top + (contentArea.Height - imgHeight) / 2;
 
             pageCanvas.DrawBitmap(
                 chartBitmap,
@@ -591,13 +705,9 @@ public class IspReportPdfService : IIspReportPdfService
         return stream.ToArray();
     }
 
-    private static byte[] RenderWeeklyMatrixPdf(List<WeeklySalesStat> stats)
+    private byte[] RenderWeeklyMatrixPdf(List<WeeklySalesStat> stats)
     {
-        const float pageWidth = 842;
-        const float pageHeight = 595;
-        const float margin = 36f;
-        const float headerHeight = 40f;
-        const float rowHeight = 18f;
+        const float rowHeight = 24f;
 
         var periods = stats
             .Select(s => s.Period)
@@ -613,21 +723,18 @@ public class IspReportPdfService : IIspReportPdfService
         using var stream = new MemoryStream();
         using var doc = SKDocument.CreatePdf(stream);
 
-        using var page = doc.BeginPage(pageWidth, pageHeight);
-        page.Clear(SKColors.White);
-
         using var titlePaint = new SKPaint
         {
             Color = SKColors.Black,
-            TextSize = 16,
+            TextSize = 14,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
         };
 
         using var headerPaint = new SKPaint
         {
-            Color = SKColors.Black,
-            TextSize = 9,
+            Color = SKColors.Green,
+            TextSize = 8,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
         };
@@ -635,7 +742,7 @@ public class IspReportPdfService : IIspReportPdfService
         using var cellPaint = new SKPaint
         {
             Color = SKColors.Black,
-            TextSize = 8,
+            TextSize = 7,
             IsAntialias = true,
             Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
         };
@@ -648,18 +755,7 @@ public class IspReportPdfService : IIspReportPdfService
             Style = SKPaintStyle.Stroke,
         };
 
-        var title = "ISP × Week Matrix";
-        var titleBounds = new SKRect();
-        titlePaint.MeasureText(title, ref titleBounds);
-        var titleY = margin + titleBounds.Height;
-        page.DrawText(
-            title,
-            margin,
-            titleY,
-            titlePaint
-        );
-
-        // Build a human-readable summary of the week date ranges
+        // Build week date labels for subtitle
         var weekDateLabels = periods
             .Select(p =>
             {
@@ -673,74 +769,95 @@ public class IspReportPdfService : IIspReportPdfService
             .Distinct()
             .ToList();
 
-        float tableTop;
+        int pageNumber = 0;
+        SKCanvas? currentCanvas = null;
 
+        // Helper to start a new page and draw headers + table column headers
+        SKRect StartNewPage()
+        {
+            if (currentCanvas != null)
+                doc.EndPage();
+
+            pageNumber++;
+            bool isCover = pageNumber == 1;
+
+            currentCanvas = doc.BeginPage(PdfBrandingHelper.PageWidth, PdfBrandingHelper.PageHeight);
+            var contentArea = PdfBrandingHelper.DrawPageLayout(
+                currentCanvas,
+                "ISP × Week Sales Matrix",
+                pageNumber,
+                isCover,
+                _logoPath
+            );
+
+            return contentArea;
+        }
+
+        // Start first page
+        var area = StartNewPage();
+        float tableLeft = area.Left;
+        float tableRight = area.Right;
+        float rowTop = area.Top;
+
+        // Subtitle inside content area (first page only)
         if (weekDateLabels.Count > 0)
         {
             using var subtitlePaint = new SKPaint
             {
-                Color = SKColors.Gray,
-                TextSize = 10,
+                Color = SKColors.Black,
+                TextSize = 14,
                 IsAntialias = true,
-                Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Normal),
+                Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyle.Bold),
             };
-
             var subtitle = $"Weeks: {string.Join("; ", weekDateLabels)}";
             var subtitleBounds = new SKRect();
             subtitlePaint.MeasureText(subtitle, ref subtitleBounds);
-            var subtitleY = titleY + 6 + subtitleBounds.Height;
-
-            page.DrawText(
-                subtitle,
-                margin,
-                subtitleY,
-                subtitlePaint
-            );
-
-            tableTop = subtitleY + 16f;
+            currentCanvas!.DrawText(subtitle, tableLeft, rowTop + subtitleBounds.Height, subtitlePaint);
+            rowTop += subtitleBounds.Height + 16f;
         }
-        else
-        {
-            tableTop = margin + headerHeight;
-        }
-        float tableLeft = margin;
-        float tableRight = pageWidth - margin;
 
-        float ispColWidth = 90f;
-        float totalColWidth = 60f;
+        // Table layout
+        float ispColWidth = 80f;
+        float totalColWidth = 55f;
         float remainingWidth = tableRight - tableLeft - ispColWidth - totalColWidth;
         float colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
 
-        float headerY = tableTop;
-
-        page.DrawText("ISP", tableLeft + 4, headerY, headerPaint);
-        page.DrawText("Total", tableLeft + ispColWidth + 4, headerY, headerPaint);
-
-        for (int i = 0; i < periods.Count; i++)
+        // Draw column headers
+        void DrawTableHeaders(float y)
         {
-            var period = periods[i];
-            var x = tableLeft + ispColWidth + totalColWidth + i * colWidth + 4;
-            var label = period.Split(' ')[0];
-            page.DrawText(label, x, headerY, headerPaint);
+            currentCanvas!.DrawText("ISP", tableLeft + 4, y, headerPaint);
+            currentCanvas.DrawText("Total", tableLeft + ispColWidth + 4, y, headerPaint);
+            for (int i = 0; i < periods.Count; i++)
+            {
+                var period = periods[i];
+                var x = tableLeft + ispColWidth + totalColWidth + i * colWidth + 4;
+                var label = period.Split(' ')[0];
+                currentCanvas.DrawText(label, x, y, headerPaint);
+            }
         }
 
-        float rowTop = tableTop + 10f;
+        DrawTableHeaders(rowTop);
+        rowTop += 12f;
 
         foreach (var group in ispGroups)
         {
-            if (rowTop + rowHeight > pageHeight - margin)
+            if (rowTop + rowHeight > area.Bottom)
             {
-                doc.EndPage();
-                using var newPage = doc.BeginPage(pageWidth, pageHeight);
-                newPage.Clear(SKColors.White);
-                rowTop = margin;
+                area = StartNewPage();
+                tableLeft = area.Left;
+                tableRight = area.Right;
+                remainingWidth = tableRight - tableLeft - ispColWidth - totalColWidth;
+                colWidth = periods.Count > 0 ? remainingWidth / periods.Count : remainingWidth;
+                rowTop = area.Top;
+                DrawTableHeaders(rowTop);
+                rowTop += 12f;
             }
 
             var ispName = group.Key;
             var totalPurchases = group.Sum(s => s.Purchases);
 
-            page.DrawText(ispName, tableLeft + 4, rowTop + rowHeight - 4, cellPaint);
-            page.DrawText(
+            currentCanvas!.DrawText(ispName, tableLeft + 4, rowTop + rowHeight - 4, cellPaint);
+            currentCanvas.DrawText(
                 totalPurchases.ToString("N0"),
                 tableLeft + ispColWidth + 4,
                 rowTop + rowHeight - 4,
@@ -759,12 +876,12 @@ public class IspReportPdfService : IIspReportPdfService
                     rowTop + rowHeight
                 );
 
-                page.DrawRect(rect, gridPaint);
+                currentCanvas.DrawRect(rect, gridPaint);
 
                 if (byPeriod.TryGetValue(periods[i], out var cell))
                 {
                     var text = cell.Purchases.ToString("N0");
-                    page.DrawText(
+                    currentCanvas.DrawText(
                         text,
                         rect.Left + 4,
                         rect.Bottom - 4,
@@ -819,8 +936,8 @@ public class IspReportPdfService : IIspReportPdfService
         model.PlotAreaBorderColor = OxyColors.Transparent;
 
         var months = data.Select(d => FormatMonth(d.UDay)).ToArray();
-        var purchaseColor = OxyColor.FromRgb(0x3C, 0x71, 0xDD); // #3c71dd
-        var amountColor = OxyColor.FromRgb(0x79, 0x53, 0xC6); // #7953c6
+        var purchaseColor = OxyColors.Red; // #FF0000
+        var amountColor = OxyColors.Black; // #000000
 
         var isBar = chartType.Equals("bar", StringComparison.OrdinalIgnoreCase);
 
@@ -927,8 +1044,8 @@ public class IspReportPdfService : IIspReportPdfService
         model.PlotAreaBorderColor = OxyColors.Transparent;
 
         var days = data.Select(d => FormatDay(d.UDay)).ToArray();
-        var subsColor = OxyColor.FromRgb(0x3C, 0x71, 0xDD);
-        var trafficColor = OxyColor.FromRgb(0x79, 0x53, 0xC6);
+        var subsColor = OxyColor.FromRgb(0x22, 0xC5, 0x5E); // Green #22C55E
+        var trafficColor = OxyColors.Red; // #FF0000
 
         var categoryAxis = new CategoryAxis
         {
@@ -1186,21 +1303,23 @@ public class IspReportPdfService : IIspReportPdfService
         return $"postpaid-all-isps_default_{chartType.ToLowerInvariant()}";
     }
 
-    private static byte[] RenderPostpaidMultiPagePdf(
+    private byte[] RenderPostpaidMultiPagePdf(
         List<(string Title, List<PostpaidReport> Data)> pages,
         string chartType
     )
     {
-        const float pageWidth = 842; // A4 landscape width in points
-        const float pageHeight = 595; // A4 landscape height in points
         const int chartPixelWidth = 1600;
         const int chartPixelHeight = 900;
 
         using var stream = new MemoryStream();
         using var skDoc = SKDocument.CreatePdf(stream);
 
+        int pageNumber = 0;
         foreach (var (title, data) in pages)
         {
+            pageNumber++;
+            bool isCover = pageNumber == 1;
+
             var plotModel = BuildPostpaidPlotModel(data, chartType, title);
             using var chartBitmap = RenderChartToBitmap(
                 plotModel,
@@ -1208,25 +1327,26 @@ public class IspReportPdfService : IIspReportPdfService
                 chartPixelHeight
             );
 
-            using var pageCanvas = skDoc.BeginPage(pageWidth, pageHeight);
+            using var pageCanvas = skDoc.BeginPage(PdfBrandingHelper.PageWidth, PdfBrandingHelper.PageHeight);
 
-            // White background
-            pageCanvas.Clear(SKColors.White);
+            var contentArea = PdfBrandingHelper.DrawPageLayout(
+                pageCanvas,
+                "Postpaid Sales Report",
+                pageNumber,
+                isCover,
+                _logoPath
+            );
 
-            // Fit chart image into page with margin
-            const float margin = 30f;
-            var availableWidth = pageWidth - 2 * margin;
-            var availableHeight = pageHeight - 2 * margin;
-
+            // Fit chart image into content area
             var scale = Math.Min(
-                availableWidth / chartBitmap.Width,
-                availableHeight / chartBitmap.Height
+                contentArea.Width / chartBitmap.Width,
+                contentArea.Height / chartBitmap.Height
             );
 
             var imgWidth = chartBitmap.Width * scale;
             var imgHeight = chartBitmap.Height * scale;
-            var x = (pageWidth - imgWidth) / 2;
-            var y = (pageHeight - imgHeight) / 2;
+            var x = contentArea.Left + (contentArea.Width - imgWidth) / 2;
+            var y = contentArea.Top + (contentArea.Height - imgHeight) / 2;
 
             pageCanvas.DrawBitmap(
                 chartBitmap,
@@ -1258,7 +1378,7 @@ public class IspReportPdfService : IIspReportPdfService
         model.PlotAreaBorderColor = OxyColors.Transparent;
 
         var months = data.Select(d => FormatMonth(d.Period)).ToArray();
-        var eWalletColor = OxyColor.FromRgb(0x3C, 0x71, 0xDD); // #3c71dd
+        var eWalletColor = OxyColor.FromRgb(0x22, 0xC5, 0x5E); // Green #22C55E
 
         var isBar = chartType.Equals("bar", StringComparison.OrdinalIgnoreCase);
 

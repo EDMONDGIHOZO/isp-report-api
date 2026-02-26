@@ -397,6 +397,35 @@ public class IspReportController : ControllerBase
         }
     }
 
+    [HttpGet("postpaid-retailers")]
+    [Authorize]
+    public async Task<IActionResult> GetPostpaidRetailerDistribution(
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] string? isp
+    )
+    {
+        try
+        {
+            var filter = new IspReportFilter
+            {
+                FromPeriod = from,
+                ToPeriod = to,
+                IspName = isp,
+            };
+
+            var stats = await _ispReportService.GetPostpaidRetailerDistributionAsync(filter);
+            return Ok(stats);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(
+                500,
+                new { Error = "Failed to fetch postpaid retailer distribution", Details = ex.Message }
+            );
+        }
+    }
+
     [HttpGet("postpaid/monthly")]
     [Authorize]
     public async Task<IActionResult> GetPostpaidReports(

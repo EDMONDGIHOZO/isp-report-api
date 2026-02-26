@@ -9,6 +9,7 @@ public interface IIspReportService
     Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<IEnumerable<IspStat>> GetPrepaidRetailerDistributionAsync(IspReportFilter filter);
+    Task<IEnumerable<IspStat>> GetPostpaidRetailerDistributionAsync(IspReportFilter filter);
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
@@ -112,6 +113,25 @@ public class IspReportService : IIspReportService
         }
 
         var result = await _repository.GetPrepaidRetailerDistributionAsync(filter);
+        var resultList = result.ToList();
+        await _cacheService.SetAsync(cacheKey, resultList);
+        return resultList;
+    }
+
+    public async Task<IEnumerable<IspStat>> GetPostpaidRetailerDistributionAsync(
+        IspReportFilter filter
+    )
+    {
+        var cacheKey = _cacheService.GenerateCacheKey("postpaid_retailer_distribution", filter);
+        var cached = await _cacheService.GetAsync<List<IspStat>>(cacheKey);
+
+        if (cached != null)
+        {
+            _logger.LogDebug("Returning cached postpaid retailer distribution");
+            return cached;
+        }
+
+        var result = await _repository.GetPostpaidRetailerDistributionAsync(filter);
         var resultList = result.ToList();
         await _cacheService.SetAsync(cacheKey, resultList);
         return resultList;

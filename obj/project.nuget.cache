@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "HjVxr+ZIyf0=",
+  "dgSpecHash": "cLPiDdFDL1M=",
   "success": true,
   "projectFilePath": "/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/isp-report-api.csproj",
   "expectedPackageFiles": [
@@ -73,8 +73,7 @@
     "/Users/eddy/.nuget/packages/system.security.cryptography.protecteddata/8.0.0/system.security.cryptography.protecteddata.8.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.security.permissions/8.0.0/system.security.permissions.8.0.0.nupkg.sha512",
     "/Users/eddy/.nuget/packages/system.windows.extensions/8.0.0/system.windows.extensions.8.0.0.nupkg.sha512",
-    "/Users/eddy/.nuget/packages/zstdsharp.port/0.8.6/zstdsharp.port.0.8.6.nupkg.sha512",
-    "/Users/eddy/.nuget/packages/microsoft.netcore.app.host.linux-x64/10.0.1/microsoft.netcore.app.host.linux-x64.10.0.1.nupkg.sha512"
+    "/Users/eddy/.nuget/packages/zstdsharp.port/0.8.6/zstdsharp.port.0.8.6.nupkg.sha512"
   ],
   "logs": [
     {

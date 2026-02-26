@@ -1,6 +1,9 @@
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/appsettings.Development.json
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/appsettings.json
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/isp-report-api.staticwebassets.endpoints.json
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/Assets/.DS_Store
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/Assets/ktrn-logo.jpeg
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/Assets/ktrn-logo.png
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/isp-report-api
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/isp-report-api.deps.json
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/bin/Release/net10.0/linux-x64/isp-report-api.runtimeconfig.json

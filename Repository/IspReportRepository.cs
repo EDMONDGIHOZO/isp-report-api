@@ -11,6 +11,7 @@ public interface IIspReportRepository
     Task<IEnumerable<IspMonthlyReportSeries>> GetMonthlyReportsAllIspsAsync(IspReportFilter filter);
     Task<IEnumerable<string>> GetAllIspNamesAsync();
     Task<IEnumerable<IspStat>> GetPrepaidRetailerDistributionAsync(IspReportFilter filter);
+    Task<IEnumerable<IspStat>> GetPostpaidRetailerDistributionAsync(IspReportFilter filter);
     Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReport>> GetPostpaidReportsAsync(IspReportFilter filter);
     Task<IEnumerable<PostpaidReportSeries>> GetPostpaidReportsAllIspsAsync(IspReportFilter filter);
@@ -270,6 +271,66 @@ public class IspReportRepository : IIspReportRepository
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
         return await connection.QueryAsync<IspStat>(sql, parameters);
+    }
+
+    public async Task<IEnumerable<IspStat>> GetPostpaidRetailerDistributionAsync(
+        IspReportFilter filter
+    )
+    {
+        var sql = new StringBuilder(
+            @"
+            SELECT 
+                b.sp_name AS Name,
+                COUNT(a.acct_id) AS Purchases,
+                ROUND(SUM(a.charge / 100), 0) AS Amount
+            FROM acct_item@pub_link_cc a, part_sp@pub_link_cc b
+            WHERE a.acct_id = b.virt_acct_id
+              AND b.sp_id > 1"
+        );
+
+        var parameters = new DynamicParameters();
+
+        if (!string.IsNullOrEmpty(filter.FromPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= :FromPeriod");
+            parameters.Add("FromPeriod", filter.FromPeriod);
+        }
+        else
+        {
+            // 13 completed months back (exclude current incomplete month)
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') >= TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.ToPeriod))
+        {
+            sql.Append(" AND TO_CHAR(a.STATE_DATE, 'YYYYMM') <= :ToPeriod");
+            parameters.Add("ToPeriod", filter.ToPeriod);
+        }
+        else
+        {
+            // Exclude current month (incomplete); show up to last completed month
+            sql.Append(
+                " AND TO_CHAR(a.STATE_DATE, 'YYYYMM') < TO_CHAR(SYSDATE, 'YYYYMM')"
+            );
+        }
+
+        if (!string.IsNullOrEmpty(filter.IspName))
+        {
+            sql.Append(" AND b.sp_name = :IspName");
+            parameters.Add("IspName", filter.IspName);
+        }
+
+        sql.Append(
+            @"
+            GROUP BY b.sp_name
+            ORDER BY SUM(a.charge) DESC"
+        );
+
+        using var connection = _connectionFactory.CreateConnection();
+        connection.Open();
+        return await connection.QueryAsync<IspStat>(sql.ToString(), parameters);
     }
 
     public async Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter)

@@ -441,6 +441,7 @@ var allowedPageKeys = new[]
     "dashboard/traffic",
     "dashboard/product-sales",
     "dashboard/purchases",
+    "dashboard/logs",
     "dashboard/settings",
 };
 
@@ -601,6 +602,100 @@ app.MapGet(
                 })
                 .ToListAsync();
             return Results.Ok(users);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/access-logs",
+        async (HttpContext context, AppDbContext db, [FromQuery] string? email, [FromQuery] int? take, [FromQuery] bool? latestOnly) =>
+        {
+            var userIdClaim =
+                context.User.FindFirst(ClaimTypes.NameIdentifier)
+                ?? context.User.FindFirst(JwtRegisteredClaimNames.Sub);
+
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+            {
+                return Results.Unauthorized();
+            }
+
+            var user = await db
+                .Users.AsNoTracking()
+                .Include(u => u.Role)
+                    .ThenInclude(r => r!.RolePages)
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
+            var hasAccessLogsPermission =
+                user?.Role?.RolePages?.Any(rp => rp.PageKey == "dashboard/logs") == true;
+
+            if (!hasAccessLogsPermission)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            var query = db.AccessLogs.AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(email))
+            {
+                query = query.Where(l => l.Email.Contains(email));
+            }
+
+            var limit = take.GetValueOrDefault(100);
+            if (limit <= 0 || limit > 500)
+            {
+                limit = 100;
+            }
+
+            bool onlyLatest = latestOnly ?? true;
+
+            List<dynamic> result;
+
+            if (onlyLatest)
+            {
+                var latestLogsInfo = await query
+                    .GroupBy(l => l.Email)
+                    .Select(g => new { Email = g.Key, MaxTimestamp = g.Max(l => l.TimestampUtc) })
+                    .OrderByDescending(x => x.MaxTimestamp)
+                    .Take(limit)
+                    .ToListAsync();
+
+                var logEmails = latestLogsInfo.Select(x => x.Email).ToList();
+
+                var rawLogs = await query
+                    .Where(l => logEmails.Contains(l.Email))
+                    .ToListAsync();
+                
+                var logs = rawLogs
+                    .GroupBy(l => l.Email)
+                    .SelectMany(g => g.OrderByDescending(l => l.TimestampUtc).Take(5))
+                    .OrderByDescending(l => l.TimestampUtc)
+                    .ToList();
+
+                result = logs.Select(l => (dynamic)new
+                {
+                    l.Id,
+                    l.Email,
+                    l.TimestampUtc,
+                    l.IpAddress,
+                }).ToList();
+            }
+            else
+            {
+                var logs = await query
+                    .OrderByDescending(l => l.TimestampUtc)
+                    .Take(limit)
+                    .ToListAsync();
+
+                result = logs.Select(l => (dynamic)new
+                {
+                    l.Id,
+                    l.Email,
+                    l.TimestampUtc,
+                    l.IpAddress,
+                }).ToList();
+            }
+
+            return Results.Ok(result);
         }
     )
     .RequireAuthorization();
@@ -827,6 +922,7 @@ static async Task CreateAdminUserAsync(
             "dashboard/traffic",
             "dashboard/product-sales",
             "dashboard/purchases",
+            "dashboard/logs",
             "dashboard/settings",
         };
 

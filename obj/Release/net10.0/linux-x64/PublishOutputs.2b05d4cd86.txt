@@ -1,6 +1,9 @@
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/isp-report-api
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/appsettings.Development.json
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/appsettings.json
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/Assets/.DS_Store
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/Assets/ktrn-logo.jpeg
+/Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/Assets/ktrn-logo.png
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/isp-report-api.dll
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/isp-report-api.deps.json
 /Users/eddy/Documents/devroom/client-projects/ktrn/isp-report-api/publish/isp-report-api.runtimeconfig.json
