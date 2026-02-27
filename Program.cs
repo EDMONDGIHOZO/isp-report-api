@@ -238,6 +238,7 @@ app.MapPost(
                     Email = user!.Email,
                     TimestampUtc = DateTime.UtcNow,
                     IpAddress = ip,
+                    Url = request.Url,
                 }
             );
             await db.SaveChangesAsync();
@@ -361,6 +362,7 @@ app.MapPost(
                         Email = user.Email,
                         TimestampUtc = DateTime.UtcNow,
                         IpAddress = ip,
+                        Url = request.Url,
                     }
                 );
                 await db.SaveChangesAsync();
@@ -432,6 +434,50 @@ app.MapGet(
     )
     .RequireAuthorization()
     .WithName("GetCurrentUser");
+
+app.MapPost(
+        "/auth/record-access",
+        async ([FromBody] RecordAccessRequest request, HttpContext context, AppDbContext db) =>
+        {
+            var userIdClaim =
+                context.User.FindFirst(ClaimTypes.NameIdentifier)
+                ?? context.User.FindFirst(JwtRegisteredClaimNames.Sub);
+
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+            {
+                return Results.Unauthorized();
+            }
+
+            var user = await db
+                .Users.AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (user == null)
+            {
+                return Results.NotFound();
+            }
+
+            var ip =
+                context.Connection.RemoteIpAddress?.ToString()
+                ?? context.Request.Headers["X-Forwarded-For"].FirstOrDefault()
+                ?? "unknown";
+
+            db.AccessLogs.Add(
+                new AccessLog
+                {
+                    Email = user.Email,
+                    TimestampUtc = DateTime.UtcNow,
+                    IpAddress = ip,
+                    Url = request.Url,
+                }
+            );
+            await db.SaveChangesAsync();
+
+            return Results.Ok();
+        }
+    )
+    .RequireAuthorization()
+    .WithName("RecordAccess");
 
 var allowedPageKeys = new[]
 {
@@ -677,6 +723,7 @@ app.MapGet(
                     l.Email,
                     l.TimestampUtc,
                     l.IpAddress,
+                    l.Url,
                 }).ToList();
             }
             else
@@ -692,6 +739,7 @@ app.MapGet(
                     l.Email,
                     l.TimestampUtc,
                     l.IpAddress,
+                    l.Url,
                 }).ToList();
             }
 
@@ -971,9 +1019,11 @@ static async Task CreateAdminUserAsync(
     Console.WriteLine("Done.");
 }
 
-public record AdLoginRequest(string Username, string Password);
+public record AdLoginRequest(string Username, string Password, string? Url = null);
 
-public record LoginRequest(string Email, string Password);
+public record LoginRequest(string Email, string Password, string? Url = null);
+
+public record RecordAccessRequest(string? Url = null);
 
 public record RegisterRequest(string Email, string Password, string? Name);
 

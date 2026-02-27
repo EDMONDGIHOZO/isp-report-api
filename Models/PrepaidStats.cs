@@ -5,6 +5,10 @@ public class PrepaidStats
     public int TotalPurchases { get; set; }
     public decimal AveragePurchases { get; set; }
     public decimal MonthOverMonthGrowth { get; set; }
+    public string? LastMonthKey { get; set; }
+    public string? PreviousMonthKey { get; set; }
+    public decimal LastMonthAmount { get; set; }
+    public decimal PreviousMonthAmount { get; set; }
     public IspStat? TopIspByAmount { get; set; }
     public IspStat? TopIspByPurchases { get; set; }
     public IspStat? LowestIsp { get; set; }

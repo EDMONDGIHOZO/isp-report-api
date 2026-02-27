@@ -439,6 +439,16 @@ public class IspReportRepository : IIspReportRepository
             GROUP BY TO_CHAR(STATE_DATE, 'YYYYMM')
             ORDER BY TO_CHAR(STATE_DATE, 'YYYYMM') DESC";
 
+        var monthlyAmountsSql =
+            $@"
+            SELECT 
+                TO_CHAR(STATE_DATE, 'YYYYMM') AS Month,
+                SUM(SUBS_AMOUNT) / 100 AS Amount
+            FROM RB_REPORT.REPORT_ALL_IPP
+            {whereClause}
+            GROUP BY TO_CHAR(STATE_DATE, 'YYYYMM')
+            ORDER BY TO_CHAR(STATE_DATE, 'YYYYMM') DESC";
+
         using var connection = _connectionFactory.CreateConnection();
         connection.Open();
 
@@ -458,26 +468,45 @@ public class IspReportRepository : IIspReportRepository
                 parameters
             )
         ).ToList();
+        var monthlyAmounts = (
+            await connection.QueryAsync<(string Month, decimal Amount)>(
+                monthlyAmountsSql,
+                parameters
+            )
+        ).ToList();
 
         var monthCount = monthStats.Count;
         var averagePurchases = monthCount > 0 ? (decimal)totalPurchases / monthCount : 0;
 
         decimal monthOverMonthGrowth = 0;
-        if (monthlyPurchases.Count >= 2)
+        string? lastMonthKey = null;
+        string? previousMonthKey = null;
+        decimal lastMonthAmount = 0;
+        decimal previousMonthAmount = 0;
+
+        if (monthlyAmounts.Count >= 2)
         {
-            var lastMonth = monthlyPurchases[0].Purchases;
-            var previousMonth = monthlyPurchases[1].Purchases;
-            if (previousMonth > 0)
-            {
-                monthOverMonthGrowth = ((decimal)(lastMonth - previousMonth) / previousMonth) * 100;
-            }
+            var lastMonth = monthlyAmounts[0];
+            var previousMonth = monthlyAmounts[1];
+
+            lastMonthKey = lastMonth.Month;
+            previousMonthKey = previousMonth.Month;
+
+            lastMonthAmount = lastMonth.Amount;
+            previousMonthAmount = previousMonth.Amount;
         }
 
         return new PrepaidStats
         {
             TotalPurchases = totalPurchases,
-            AveragePurchases = Math.Round(averagePurchases, 2),
-            MonthOverMonthGrowth = Math.Round(monthOverMonthGrowth, 2),
+            // AveragePurchases = Math.Round(averagePurchases, 2),
+            // MonthOverMonthGrowth = Math.Round(monthOverMonthGrowth, 2),
+            AveragePurchases = averagePurchases,
+            MonthOverMonthGrowth = 0,
+            LastMonthKey = lastMonthKey,
+            PreviousMonthKey = previousMonthKey,
+            LastMonthAmount = lastMonthAmount,
+            PreviousMonthAmount = previousMonthAmount,
             TopIspByAmount = ispStatsByAmount.FirstOrDefault(),
             TopIspByPurchases = ispStatsByPurchases.FirstOrDefault(),
             LowestIsp = ispStatsByAmount.LastOrDefault(),

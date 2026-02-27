@@ -15,5 +15,8 @@ public class AccessLog
 
     [MaxLength(64)]
     public string? IpAddress { get; set; }
+
+    [MaxLength(2048)]
+    public string? Url { get; set; }
 }
 

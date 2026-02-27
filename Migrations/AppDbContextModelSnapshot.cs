@@ -37,6 +37,10 @@ namespace isp_report_api.Migrations
                     b.Property<DateTime>("TimestampUtc")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<string>("Url")
+                        .HasMaxLength(2048)
+                        .HasColumnType("varchar(2048)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email");

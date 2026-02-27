@@ -139,7 +139,8 @@ public class IspReportService : IIspReportService
 
     public async Task<PrepaidStats> GetPrepaidStatsAsync(IspReportFilter filter)
     {
-        var cacheKey = _cacheService.GenerateCacheKey("prepaid_stats", filter);
+        // Use a versioned cache key to avoid serving stale structures/fields
+        var cacheKey = _cacheService.GenerateCacheKey("prepaid_stats_v2", filter);
         var cached = await _cacheService.GetAsync<PrepaidStats>(cacheKey);
         
         if (cached != null)
